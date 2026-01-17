@@ -1,10 +1,11 @@
 import isaacgym
-from legged_gym.utils.task_registry import task_registry
+from legged_gym.envs import *
+from legged_gym.utils import get_args, task_registry
 import torch
 
 def test_env():
     # 1. Tạo môi trường
-    env, env_cfg = task_registry.make_env(name="h1_unified", args=None)
+    env, env_cfg = task_registry.make_env(name="h1_unified_task", args=None)
     
     # 2. Reset lần đầu
     env.reset()

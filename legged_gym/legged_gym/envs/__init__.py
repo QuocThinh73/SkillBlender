@@ -29,7 +29,7 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
-from legged_gym.legged_gym.envs.h1.h1_unified_task.h1_unified_task_config import H1UnifiedTaskCfgPPO
+from legged_gym.envs.h1.h1_unified_task.h1_unified_task_config import H1UnifiedTaskCfgPPO
 
 # H1
 ## Primitive Skills
@@ -149,6 +149,11 @@ from .h1_2.h1_2_task_transfer.h1_2_task_transfer_config import H1_2TaskTransferC
 from .h1_2.h1_2_task_cabinet.h1_2_task_cabinet import H1_2TaskCabinet
 from .h1_2.h1_2_task_cabinet.h1_2_task_cabinet_config import H1_2TaskCabinetCfg, H1_2TaskCabinetCfgPPO
 
+## Test
+### H1 Unified Task
+from .h1.h1_unified_task.h1_unified_task import H1UnifiedTask
+from .h1.h1_unified_task.h1_unified_task_config import H1UnifiedTaskCfg, H1UnifiedTaskCfgPPO
+
 from legged_gym.utils.task_registry import task_registry
 
 task_registry.register( "h1_walking", H1Walking, H1WalkingCfg(), H1WalkingCfgPPO(), 'h1/h1_walking')
@@ -187,7 +192,4 @@ task_registry.register( "h1_2_task_ball", H1_2TaskBall, H1_2TaskBallCfg(), H1_2T
 task_registry.register( "h1_2_task_carry", H1_2TaskCarry, H1_2TaskCarryCfg(), H1_2TaskCarryCfgPPO(), 'h1_2/h1_2_task_carry')
 task_registry.register( "h1_2_task_transfer", H1_2TaskTransfer, H1_2TaskTransferCfg(), H1_2TaskTransferCfgPPO(), 'h1_2/h1_2_task_transfer')
 task_registry.register( "h1_2_task_cabinet", H1_2TaskCabinet, H1_2TaskCabinetCfg(), H1_2TaskCabinetCfgPPO(), 'h1_2/h1_2_task_cabinet')
-
-from h1.h1_unified_task.h1_unified_task import H1UnifiedTask
-from h1.h1_unified_task.h1_unified_task_config import H1UnifiedTaskCfg, H1UnifiedTaskCfgPPO
 task_registry.register( "h1_unified_task", H1UnifiedTask, H1UnifiedTaskCfg(), H1UnifiedTaskCfgPPO(), 'h1/h1_unified_task')
