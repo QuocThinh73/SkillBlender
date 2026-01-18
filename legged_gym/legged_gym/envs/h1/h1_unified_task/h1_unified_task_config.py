@@ -3,17 +3,17 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        num_tasks = 2
-        
+        num_tasks = 4
+
     class env(LeggedRobotCfg.env):
         # change the observation dim
         num_actions = 19
         frame_stack = 1
         c_frame_stack = 3
-        command_dim = 6
+        command_dim = 8
         num_single_obs = 3 * num_actions + 6 + command_dim # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
-        single_num_privileged_obs = 3 * num_actions + 33
+        single_num_privileged_obs = 3 * num_actions + 18 + 8
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
         num_envs = 8
@@ -57,14 +57,29 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         ball_range_y = [-0.3, 0.3]
         ball_range_mass = [0.3, 0.5]
 
-        # Tasl box
-        # Table
+        # Task box
+        ## Table
         table_dims = [0.9, 1.5, 0.05]
         table_offset = [1.0, 0.0, 0.975]
-        # Box
+        ## Box
         box_size = 0.1
         box_range_x = [-0.45, -0.35]
         box_range_y = [-0.3, 0.3]
+
+        # Task button
+        ## Wall
+        wall_dims = [0.05, 2.0, 3.0]
+        wall_offset = [1.5, 0.0, 1.5]
+        ## Button
+        button_ori_z = 1.0
+
+        # Task cabinet
+        ## Cabinet
+        gapartnet_root = "resources/objects/gapartnet/"
+        gapartnet_id = 45159
+        arti_obj_offset = [1.5, 0.0, 1.0]
+        arti_obj_dof_default = 1.0
+        arti_obj_scale = 0.5
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
@@ -168,13 +183,13 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             ang_vel_yaw = [-0, 0]    # min max [rad/s]
             heading = [-0, 0]
             # Task ball
-            # goal, related to asset size
+            ## goal, related to asset size
             goal_x = [5.0, 5.0]
             goal_y = [-2.0, 2.0]
             goal_z = [0, 0.5]
             threshold = 0.5
             # Task box
-            # wrist pos command ranges
+            ## wrist pos command ranges
             wrist_max_radius = 0.25
             l_wrist_pos_x = [-0.10, 0.25]
             l_wrist_pos_y = [-0.10, 0.25]
@@ -182,9 +197,29 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             r_wrist_pos_x = [-0.10, 0.25]
             r_wrist_pos_y = [-0.25, 0.10]
             r_wrist_pos_z = [-0.25, 0.25]
-            # box goal pos command ranges
+            ## box goal pos command ranges
             box_pos_x = [0, 0.1]
             box_pos_y = [-0.5, 0.5]
+            # Task button
+            ## wrist pos command ranges
+            wrist_max_radius = 0.25
+            l_wrist_pos_x = [-0.10, 0.25]
+            l_wrist_pos_y = [-0.10, 0.25]
+            l_wrist_pos_z = [-0.25, 0.25]
+            r_wrist_pos_x = [-0.10, 0.25]
+            r_wrist_pos_y = [-0.25, 0.10]
+            r_wrist_pos_z = [-0.25, 0.25]
+            ## button pos command ranges
+            button_pos_y = [-0.5, 0.5]
+            button_pos_z = [-0.5, 0.5]
+            # Task cabinet
+            wrist_max_radius = 0.25
+            l_wrist_pos_x = [-0.10, 0.25]
+            l_wrist_pos_y = [-0.10, 0.25]
+            l_wrist_pos_z = [-0.25, 0.25]
+            r_wrist_pos_x = [-0.10, 0.25]
+            r_wrist_pos_y = [-0.25, 0.10]
+            r_wrist_pos_z = [-0.25, 0.25]
 
     class rewards(LeggedRobotCfg.rewards):
         base_height_target = 0.89
@@ -210,6 +245,12 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             # Task box
             box_pos = 5
             wrist_box_distance = 5
+            # Task button
+            wrist_button_distance = 5
+            right_arm_default = 0.5
+            # Task cabinet
+            wrist_arti_obj_distance = 5
+            arti_obj_dof = 5
             # feet_clearance = 0
             # feet_contact_number = 0
             # # gait

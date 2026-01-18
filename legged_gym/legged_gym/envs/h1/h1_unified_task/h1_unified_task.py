@@ -46,8 +46,9 @@ class H1UnifiedTask(LeggedRobot):
 
     def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
+        self.cfg = cfg
 
-        self.num_tasks = cfg.task.num_tasks
+        self.num_tasks = self.cfg.task.num_tasks
         self.task_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         self.last_feet_z = 0.05
@@ -59,6 +60,22 @@ class H1UnifiedTask(LeggedRobot):
 
         # Task box
         self.box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Task button
+        self.button_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Task cabinet
+
+        # Task carry
+        self.box_carry_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Task lift
+        self.box_lift_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Task reach
+
+        # Task transfer
+        self.box_transfer_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
         self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
         self.gym.simulate(self.sim)
@@ -215,9 +232,41 @@ class H1UnifiedTask(LeggedRobot):
         self.box_idxs = []
             
         ## Task Button
-        
+        ### Wall asset
+        wall_dims = gymapi.Vec3(*self.cfg.asset.wall_dims)
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+        wall_asset = self.gym.create_box(self.sim, wall_dims.x, wall_dims.y, wall_dims.z, asset_options)
+        wall_pose = gymapi.Transform()
+        self.wall_idxs = []
+
         ## Task Cabinet
-        
+        ### Cabinet asset
+        arti_obj_asset_options = gymapi.AssetOptions()
+        arti_obj_asset_options.use_mesh_materials = True
+        arti_obj_asset_options.mesh_normal_mode = gymapi.COMPUTE_PER_VERTEX
+        arti_obj_asset_options.override_inertia = True
+        arti_obj_asset_options.override_com = True
+        arti_obj_asset_options.fix_base_link = True
+        arti_obj_asset_options.disable_gravity = True
+        arti_obj_asset = self.gym.load_asset(self.sim, self.cfg.asset.gapartnet_root, f"{self.cfg.asset.gapartnet_id}/mobility_annotation_gapartnet.urdf", arti_obj_asset_options)
+        self.arti_obj_num_dofs = self.gym.get_asset_dof_count(arti_obj_asset)
+        print("=====> arti_obj_num_dofs:", self.arti_obj_num_dofs)
+
+        ### Configure object dofs
+        arti_obj_dof_props = self.gym.get_asset_dof_properties(arti_obj_asset)
+        arti_obj_default_dof_pos = np.zeros(self.arti_obj_num_dofs, dtype=np.float32)
+        arti_obj_default_dof_pos[:] = self.cfg.asset.arti_obj_dof_default
+        arti_obj_default_dof_state = np.zeros(self.arti_obj_num_dofs, gymapi.DofState.dtype)
+        arti_obj_default_dof_state["pos"] = arti_obj_default_dof_pos
+        arti_obj_dof_props["driveMode"].fill(gymapi.DOF_MODE_NONE) # NO DOF_MODE_POS
+        arti_obj_dof_props["stiffness"].fill(0) # how fast the arti obj gonna move
+        arti_obj_dof_props["damping"].fill(5) # large damping to prevent oscillation
+        arti_obj_dof_props["friction"].fill(0)
+        arti_obj_pose = gymapi.Transform()
+        self.arti_obj_idxs = []
+
         ## Task Carry
         
         ## Task Lift
@@ -281,9 +330,21 @@ class H1UnifiedTask(LeggedRobot):
             self.box_idxs.append(self.gym.get_actor_index(env_handle, box_handle, gymapi.DOMAIN_SIM))
 
             ## Task button
-
-            ## Task cabinet
+            ### Add wall
+            wall_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.wall_offset, device=self.device)))
+            wall_handle = self.gym.create_actor(env_handle, wall_asset, wall_pose, "wall", i, 0)
+            self.wall_idxs.append(self.gym.get_actor_index(env_handle, wall_handle, gymapi.DOMAIN_SIM))
             
+            ## Task cabinet
+            ### Add cabinet
+            arti_obj_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.arti_obj_offset, device=self.device)))
+            arti_obj_handle = self.gym.create_actor(env_handle, arti_obj_asset, arti_obj_pose, "cabinet", i, 0)
+            self.gym.set_actor_dof_properties(env_handle, arti_obj_handle, arti_obj_dof_props)
+            self.gym.set_actor_dof_states(env_handle, arti_obj_handle, arti_obj_default_dof_state, gymapi.STATE_ALL)
+            # self.gym.set_actor_dof_position_targets(env_handle, arti_obj_handle, arti_obj_default_dof_pos) # not sure whether it's useful
+            self.gym.set_actor_scale(env_handle, arti_obj_handle, self.cfg.asset.arti_obj_scale)
+            self.arti_obj_idxs.append(self.gym.get_actor_index(env_handle, arti_obj_handle, gymapi.DOMAIN_SIM))
+
             ## Task Carry
             
             ## Task Lift
@@ -301,6 +362,10 @@ class H1UnifiedTask(LeggedRobot):
         ## Task box
         self.table_idxs = torch.tensor(self.table_idxs, device=self.device)
         self.box_idxs = torch.tensor(self.box_idxs, device=self.device)
+        ## Task button
+        self.wall_idxs = torch.tensor(self.wall_idxs, device=self.device)
+        ## Task cabinet
+        self.arti_obj_idxs = torch.tensor(self.arti_obj_idxs, device=self.device)
 
         ### Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
@@ -360,10 +425,19 @@ class H1UnifiedTask(LeggedRobot):
         # Task box
         self.table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.table_idxs[0]]
         self.box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_idxs[0]]
+        # Task button
+        self.wall_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.wall_idxs[0]]
+        # Task cabinet
+        self.arti_obj_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.arti_obj_idxs[0]]
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+        
+        # Task cabinet
+        self.humanoid_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_dof]
+        self.arti_obj_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_dof:]
+
+        self.dof_pos = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
+        self.dof_vel = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
         self.base_quat = self.humanoid_root_states[:, 3:7]
         self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
 
@@ -440,11 +514,20 @@ class H1UnifiedTask(LeggedRobot):
         self.dof_pos[env_ids] = self.default_dof_pos + torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dof), device=self.device)
         self.dof_vel[env_ids] = 0.
 
+        ## Task cabinet
+        self._reset_arti_obj_and_goal(env_ids)
+
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
                                               gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
         
+        ## Task cabinet
+        arti_obj_ids_int32 = self.arti_obj_idxs[env_ids].to(dtype=torch.int32)
+        self.gym.set_dof_state_tensor_indexed(self.sim,
+                                              gymtorch.unwrap_tensor(self.dof_state),
+                                              gymtorch.unwrap_tensor(arti_obj_ids_int32), len(arti_obj_ids_int32))
+
     def _reset_root_states(self, env_ids):
         """ Resets ROOT states position and velocities of selected environmments
             Sets base position based on the curriculum
@@ -470,6 +553,8 @@ class H1UnifiedTask(LeggedRobot):
         self._reset_ball_and_goal(env_ids)
         ## Task box
         self._reset_box_and_goal(env_ids)
+        ## Task button
+        self._reset_goal(env_ids)
         
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
@@ -509,7 +594,25 @@ class H1UnifiedTask(LeggedRobot):
         self.box_goal_pos[env_ids, 0] = self.box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.box_pos_x).to(self.device)
         self.box_goal_pos[env_ids, 1] = self.box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.box_pos_y).to(self.device)
 
+    def _reset_goal(self, env_ids):
+        self.button_goal_pos[env_ids, 0] = self.wall_root_states[env_ids, 0].clone()
+        self.button_goal_pos[env_ids, 1] = self.wall_root_states[env_ids, 1].clone() + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_y).to(self.device)
+        self.button_goal_pos[env_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_z).to(self.device)
+    
+    def _reset_arti_obj_and_goal(self, env_ids):
+        self.arti_obj_dof_state[env_ids, :, 0] = self.cfg.asset.arti_obj_dof_default # pos
+        self.arti_obj_dof_state[env_ids, :, 1] = 0 # vel
+        self.arti_obj_dof_goal = 0
+
     def step(self, actions):
+        # if self.cfg.env.use_ref_actions:
+        #     actions += self.ref_action
+        # # dynamic randomization
+        # # delay = torch.rand((self.num_envs, 1), device=self.device)
+        # delay = torch.rand((self.num_envs, 1), device=self.device)
+        # actions = (1 - delay) * actions.to(self.device) + delay * self.actions
+        # actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
+        # return super().step(actions)
         if self.cfg.env.use_ref_actions:
             actions += self.ref_action
         # dynamic randomization
@@ -517,7 +620,33 @@ class H1UnifiedTask(LeggedRobot):
         delay = torch.rand((self.num_envs, 1), device=self.device)
         actions = (1 - delay) * actions.to(self.device) + delay * self.actions
         actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
-        return super().step(actions)
+        
+        # changed version of super().step()
+        clip_actions = self.cfg.normalization.clip_actions
+        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+        # step physics and render each frame
+        self.render()
+        for _ in range(self.cfg.control.decimation):
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
+            arti_obj_force_buffer = torch.zeros((self.num_envs, self.arti_obj_num_dofs), device=self.device)
+            full_force_buffer = torch.cat((self.torques, arti_obj_force_buffer), dim=1) # [num_envs, num_dofs + arti_obj_num_dofs]
+            humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
+            self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
+                                                            gymtorch.unwrap_tensor(full_force_buffer),
+                                                            gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
+
+            self.gym.simulate(self.sim)
+            if self.device == 'cpu':
+                self.gym.fetch_results(self.sim, True)
+            self.gym.refresh_dof_state_tensor(self.sim)
+        self.post_physics_step()
+
+        # return clipped obs, clipped states (None), rewards, dones and infos
+        clip_obs = self.cfg.normalization.clip_observations
+        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        if self.privileged_obs_buf is not None:
+            self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
     
     def post_physics_step(self):
         """ check terminations, compute observations and rewards
@@ -621,6 +750,57 @@ class H1UnifiedTask(LeggedRobot):
         wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
         wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
         return torch.exp(-4 * wrist_box_error), wrist_box_error
+    
+    # Task button rewards
+    def _reward_wrist_pos(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
+        wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_pos_error), wrist_pos_error
+    
+    def _reward_wrist_button_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos = wrist_pos[:, 0, :3] # [num_envs, 3], left hand, position only
+        button_goal_pos = self.button_goal_pos[:, :3] # [num_envs, 3]
+        wrist_button_diff = wrist_pos - button_goal_pos # [num_envs, 3]
+        wrist_button_error = torch.mean(torch.abs(wrist_button_diff), dim=1)
+        return torch.exp(-4 * wrist_button_error), wrist_button_error
+    
+    def _reward_right_arm_default(self):
+        """
+        Calculates the reward for keeping right arm joint positions close to default positions.
+        """
+        right_shoulder_pitch_index = 15
+        joint_diff = self.dof_pos - self.default_joint_pd_target
+        right_arm_diff = joint_diff[:, right_shoulder_pitch_index:] # start from right shoulder pitch
+        right_arm_error = torch.mean(torch.abs(right_arm_diff), dim=1)
+        return torch.exp(-4 * right_arm_error), right_arm_error
+
+    # Task cabinet rewards
+    def _reward_torso_arti_obj_distance(self):
+        torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
+        arti_obj_pos = self.arti_obj_root_states[:, :3] # [num_envs, 3]
+        torso_arti_obj_diff = arti_obj_pos - torso_pos # [num_envs, 3]
+        torso_arti_obj_distance = torch.norm(torso_arti_obj_diff, dim=1) # [num_envs]
+        torso_arti_obj_distance[torso_arti_obj_distance < 0.1] = 0 # ignore small distance
+        return torch.exp(-4 * torso_arti_obj_distance), torso_arti_obj_distance
+    
+    def _reward_wrist_arti_obj_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
+        arti_obj_pos = self.arti_obj_root_states[:, :3] # [num_envs, 3]
+        wrist_arti_obj_diff = wrist_pos - arti_obj_pos.unsqueeze(1) # [num_envs, 2, 3]
+        wrist_arti_obj_diff = torch.flatten(wrist_arti_obj_diff, start_dim=1) # [num_envs, 6]
+        wrist_arti_obj_error = torch.mean(torch.abs(wrist_arti_obj_diff), dim=1)
+        return torch.exp(-4 * wrist_arti_obj_error), wrist_arti_obj_error
+    
+    def _reward_arti_obj_dof(self):
+        """
+        Calculates the reward based on the difference between the current arti_obj dof positions and the target dof positions.
+        """
+        arti_obj_dof_diff = self.arti_obj_dof_state[:, :, 0] - self.arti_obj_dof_goal # [num_envs, 2]
+        arti_obj_dof_error = torch.mean(torch.abs(arti_obj_dof_diff), dim=1)
+        return torch.exp(-4 * arti_obj_dof_error), arti_obj_dof_error
 
     # Common rewards
     def _reward_joint_pos(self):
