@@ -48,8 +48,11 @@ class H1UnifiedTask(LeggedRobot):
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
         self.cfg = cfg
 
+        self.hidden_z = cfg.asset.hidden_z
+
         self.num_tasks = self.cfg.task.num_tasks
         self.task_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.task_ids = torch.randint(0, self.num_tasks, (self.num_envs,), device=self.device)
 
         self.last_feet_z = 0.05
         self.feet_height = torch.zeros((self.num_envs, 2), device=self.device)
@@ -57,6 +60,9 @@ class H1UnifiedTask(LeggedRobot):
         # Task ball
         self.ori_ball_pos = torch.zeros(self.num_envs, 3, device=self.device)
         self.goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        door_z_offsets = [offset[2] for offset in self.cfg.asset.door_offsets]
+        self.door_z_offsets = torch.tensor(door_z_offsets, device=self.device)
+        self.num_door_parts = len(self.cfg.asset.door_offsets)
 
         # Task box
         self.box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
@@ -206,6 +212,7 @@ class H1UnifiedTask(LeggedRobot):
             asset_options.disable_gravity = True
             door_asset = self.gym.create_box(self.sim, door_dims.x, door_dims.y, door_dims.z, asset_options)
             door_assets.append(door_asset)
+        self.door_idxs = []
         
         ### Ball asset
         ball_size = self.cfg.asset.ball_size
@@ -297,9 +304,12 @@ class H1UnifiedTask(LeggedRobot):
 
             ## Task ball
             ### Add door
+            env_door_idxs = []
             for door_i, door_asset in enumerate(door_assets):
                 door_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.door_offsets[door_i], device=self.device)))
                 door_handle = self.gym.create_actor(env_handle, door_asset, door_pose, f"door_{door_i}", i, 0)
+                env_door_idxs.append(self.gym.get_actor_index(env_handle, door_handle, gymapi.DOMAIN_SIM))
+            self.door_idxs.append(env_door_idxs)
             ### Add ball
             ball_pose.p.x = pos[0].item() + np.random.uniform(*self.cfg.asset.ball_range_x)
             ball_pose.p.y = pos[1].item() + np.random.uniform(*self.cfg.asset.ball_range_y)
@@ -359,6 +369,7 @@ class H1UnifiedTask(LeggedRobot):
         # Initialize indices for different body parts
         ## Task ball
         self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device)
+        self.door_idxs = torch.tensor(self.door_idxs, device=self.device)
         ## Task box
         self.table_idxs = torch.tensor(self.table_idxs, device=self.device)
         self.box_idxs = torch.tensor(self.box_idxs, device=self.device)
@@ -515,7 +526,7 @@ class H1UnifiedTask(LeggedRobot):
         self.dof_vel[env_ids] = 0.
 
         ## Task cabinet
-        self._reset_arti_obj_and_goal(env_ids)
+        self._reset_task_cabinet(env_ids)
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
@@ -550,59 +561,158 @@ class H1UnifiedTask(LeggedRobot):
             self.humanoid_root_states[env_ids, 2] += 1.8
         
         ## Task ball
-        self._reset_ball_and_goal(env_ids)
+        self._reset_task_ball(env_ids)
         ## Task box
-        self._reset_box_and_goal(env_ids)
+        self._reset_task_box(env_ids)
         ## Task button
-        self._reset_goal(env_ids)
+        self._reset_task_button(env_ids)
+        ## Task cabinet
+        self._reset_task_cabinet(env_ids)
         
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                     gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
-        
+                
         ## Task ball
         ball_ids_int32 = self.ball_idxs[env_ids].to(dtype=torch.int32)
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                    gymtorch.unwrap_tensor(self.root_states),
-                                                    gymtorch.unwrap_tensor(ball_ids_int32), len(ball_ids_int32))
+        door_ids_int32 = self.door_idxs[env_ids].flatten().to(dtype=torch.int32)
         ## Task box
         box_ids_int32 = self.box_idxs[env_ids].to(dtype=torch.int32)
-        self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                    gymtorch.unwrap_tensor(self.root_states),
-                                                    gymtorch.unwrap_tensor(box_ids_int32), len(box_ids_int32))
-
-    def _reset_ball_and_goal(self, env_ids):
-        pos = self.env_origins[env_ids].clone()
-        self.ori_ball_pos[env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
-        self.ori_ball_pos[env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
-        self.ori_ball_pos[env_ids, 2] = 0.5 * self.cfg.asset.ball_size
-        self.ball_root_states[env_ids, :3] = self.ori_ball_pos[env_ids].clone()
-        self.ball_root_states[env_ids, 3] = 1
-        self.ball_root_states[env_ids, 4:] = 0
+        table_ids_int32 = self.table_idxs[env_ids].to(dtype=torch.int32)
+        ## Task button
+        wall_ids_int32 = self.wall_idxs[env_ids].to(dtype=torch.int32)
+        ## Task cabinet
+        arti_obj_ids_int32 = self.arti_obj_idxs[env_ids].to(dtype=torch.int32)
         
-        self.goal_pos[env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.goal_x).to(self.device)
-        self.goal_pos[env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.goal_y).to(self.device)
-        self.goal_pos[env_ids, 2] = torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.goal_z).to(self.device)
+        all_actor_indices = torch.cat([
+            humanoid_ids_int32,
+            ball_ids_int32,
+            door_ids_int32,
+            box_ids_int32,
+            table_ids_int32,
+            wall_ids_int32,
+            arti_obj_ids_int32
+        ])
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim,
+            gymtorch.unwrap_tensor(self.root_states),
+            gymtorch.unwrap_tensor(all_actor_indices),
+            len(all_actor_indices)
+        )
 
-    def _reset_box_and_goal(self, env_ids):
-        self.box_root_states[env_ids, 0] = self.table_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.box_range_x).to(self.device)
-        self.box_root_states[env_ids, 1] = self.table_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.box_range_y).to(self.device)
-        self.box_root_states[env_ids, 2] = self.cfg.asset.table_offset[2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.box_size
+    def _reset_task_ball(self, env_ids):
+        task_ball_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
+
+        active_ids = env_ids[task_ball_envs]
+        inactive_ids = env_ids[~task_ball_envs]
+
+        if len(active_ids) > 0:
+            pos = self.env_origins[active_ids].clone()
+
+            # Reset ball
+            self.ori_ball_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
+            self.ori_ball_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
+            self.ori_ball_pos[active_ids, 2] = 0.5 * self.cfg.asset.ball_size
+            self.ball_root_states[active_ids, :3] = self.ori_ball_pos[active_ids].clone()
+            self.ball_root_states[active_ids, 3] = 1
+            self.ball_root_states[active_ids, 4:] = 0
+
+            # Reset door
+            active_door_indices = self.door_idxs[active_ids].flatten()
+            target_z_offsets = self.door_z_offsets.repeat(len(active_ids))
+            env_base_z = pos[:, 2].repeat_interleave(self.num_door_parts)
+            final_z = env_base_z + target_z_offsets
+            self.root_states[active_door_indices, 2] = final_z
+            self.root_states[active_door_indices, 7:13] = 0
+
+            # Reset goal
+            self.goal_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_x).to(self.device)
+            self.goal_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_y).to(self.device)
+            self.goal_pos[active_ids, 2] = torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_z).to(self.device)
+
+        if len(inactive_ids) > 0:
+            self.ball_root_states[inactive_ids, 2] = self.hidden_z
+            self.ball_root_states[inactive_ids, 7:13] = 0
+
+            inactive_door_indices = self.door_idxs[inactive_ids].flatten()
+            self.root_states[inactive_door_indices, 2] = self.hidden_z
+            self.root_states[inactive_door_indices, 7:13] = 0
+
+    def _reset_task_box(self, env_ids):
+        task_box_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BOX)
+
+        active_ids = env_ids[task_box_envs]
+        inactive_ids = env_ids[~task_box_envs]
+
+        if len(active_ids) > 0:
+            pos = self.env_origins[active_ids].clone()
+
+            # Reset table
+            self.table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.table_offset[0]
+            self.table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.table_offset[1]
+            self.table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.table_offset[2]
+            self.table_root_states[active_ids, 7:13] = 0
+
+            # Reset box
+            self.box_root_states[active_ids, 0] = self.table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_range_x).to(self.device)
+            self.box_root_states[active_ids, 1] = self.table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_range_y).to(self.device)
+            self.box_root_states[active_ids, 2] = self.table_root_states[active_ids, 2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.box_size
+            self.box_root_states[active_ids, 3] = 1
+            self.box_root_states[active_ids, 4:] = 0
+
+            # Reset goal
+            self.box_goal_pos[active_ids, 0] = self.box_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_pos_x).to(self.device)
+            self.box_goal_pos[active_ids, 1] = self.box_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_pos_y).to(self.device)
+            self.box_goal_pos[active_ids, 2] = self.box_root_states[active_ids, 2].clone()
+
+        if len(inactive_ids) > 0:
+            self.table_root_states[inactive_ids, 2] = self.hidden_z
+            self.table_root_states[inactive_ids, 7:13] = 0
+
+            self.box_root_states[inactive_ids, 2] = self.hidden_z
+            self.box_root_states[inactive_ids, 7:13] = 0
         
-        self.box_goal_pos[env_ids, 2] = self.box_root_states[env_ids, 2]
-        self.box_goal_pos[env_ids, 0] = self.box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.box_pos_x).to(self.device)
-        self.box_goal_pos[env_ids, 1] = self.box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.box_pos_y).to(self.device)
+    def _reset_task_button(self, env_ids):
+        task_button_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BUTTON)
 
-    def _reset_goal(self, env_ids):
-        self.button_goal_pos[env_ids, 0] = self.wall_root_states[env_ids, 0].clone()
-        self.button_goal_pos[env_ids, 1] = self.wall_root_states[env_ids, 1].clone() + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_y).to(self.device)
-        self.button_goal_pos[env_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_z).to(self.device)
-    
-    def _reset_arti_obj_and_goal(self, env_ids):
-        self.arti_obj_dof_state[env_ids, :, 0] = self.cfg.asset.arti_obj_dof_default # pos
-        self.arti_obj_dof_state[env_ids, :, 1] = 0 # vel
+        active_ids = env_ids[task_button_envs]
+        inactive_ids = env_ids[~task_button_envs]
+
+        if len(active_ids) > 0:
+            pos = self.env_origins[active_ids].clone()
+
+            # Reset wall
+            self.wall_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offset[0]
+            self.wall_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offset[1]
+            self.wall_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.wall_offset[2]
+            self.wall_root_states[active_ids, 7:13] = 0
+
+            # Reset goal
+            self.button_goal_pos[active_ids, 0] = self.wall_root_states[active_ids, 0].clone()
+            self.button_goal_pos[active_ids, 1] = self.wall_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.button_pos_y).to(self.device)
+            self.button_goal_pos[active_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.button_pos_z).to(self.device)
+
+        if len(inactive_ids) > 0:
+            self.wall_root_states[inactive_ids, 2] = self.hidden_z
+            self.wall_root_states[inactive_ids, 7:13] = 0
+       
+    def _reset_task_cabinet(self, env_ids):
+        self.arti_obj_dof_state[env_ids, :, 0] = self.cfg.asset.arti_obj_dof_default 
+        self.arti_obj_dof_state[env_ids, :, 1] = 0 
         self.arti_obj_dof_goal = 0
+
+        task_cabinet_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_CABINET)
+
+        active_ids = env_ids[task_cabinet_envs]
+        inactive_ids = env_ids[~task_cabinet_envs]
+
+        if len(active_ids) > 0:
+            active_indices = self.arti_obj_idxs[active_ids]
+            self.root_states[active_indices, 2] = self.cfg.asset.arti_obj_offset[2]
+            self.root_states[active_indices, 7:13] = 0
+
+        if len(inactive_ids) > 0:
+            inactive_indices = self.arti_obj_idxs[inactive_ids]
+            self.root_states[inactive_indices, 2] = self.hidden_z
+            self.root_states[inactive_indices, 7:13] = 0
 
     def step(self, actions):
         # if self.cfg.env.use_ref_actions:
@@ -709,6 +819,8 @@ class H1UnifiedTask(LeggedRobot):
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
+        new_tasks = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
+        self.task_ids[env_ids] = new_tasks
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
         for i in range(self.critic_history.maxlen):

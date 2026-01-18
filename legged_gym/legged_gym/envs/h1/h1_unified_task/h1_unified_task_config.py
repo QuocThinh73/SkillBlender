@@ -5,6 +5,11 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
         num_tasks = 4
 
+        TASK_BALL = 0
+        TASK_BOX = 1
+        TASK_BUTTON = 2
+        TASK_CABINET = 3
+
     class env(LeggedRobotCfg.env):
         # change the observation dim
         num_actions = 19
@@ -23,6 +28,8 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
 
     class asset(LeggedRobotCfg.asset):
         file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/h1/urdf/h1_wrist.urdf'
+
+        hidden_z = -10.0
 
         name = "h1"
         foot_name = "ankle"
