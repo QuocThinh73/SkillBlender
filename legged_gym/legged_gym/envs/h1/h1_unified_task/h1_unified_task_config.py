@@ -3,12 +3,13 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        num_tasks = 4
+        num_tasks = 5
 
         TASK_BALL = 0
         TASK_BOX = 1
         TASK_BUTTON = 2
         TASK_CABINET = 3
+        TASK_CARRY = 4
 
     class env(LeggedRobotCfg.env):
         # change the observation dim
@@ -21,7 +22,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + 8
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 8
+        num_envs = 16
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
@@ -87,6 +88,13 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         arti_obj_offset = [1.5, 0.0, 1.0]
         arti_obj_dof_default = 1.0
         arti_obj_scale = 0.5
+
+        # Task carry
+        box_carry_size = [0.5, 0.1, 1.0]
+        box_carry_offset_xy = [1.0, 0.0]
+        box_carry_range_x = [-0.5, -0.3]
+        box_carry_range_y = [-0.05, 0.05]
+        box_carry_range_mass = [0.1, 2.0]
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
@@ -227,6 +235,10 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             r_wrist_pos_x = [-0.10, 0.25]
             r_wrist_pos_y = [-0.25, 0.10]
             r_wrist_pos_z = [-0.25, 0.25]
+            # Task carry
+            box_carry_pos_x = [0.3, 1.0]
+            box_carry_pos_y = [-0.3, 0.3]
+            box_carry_pos_z = [0.3, 0.6] # maybe too large?
 
     class rewards(LeggedRobotCfg.rewards):
         base_height_target = 0.89
@@ -258,6 +270,9 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             # Task cabinet
             wrist_arti_obj_distance = 5
             arti_obj_dof = 5
+            # Task carry
+            box_carry_pos = 5
+            wrist_box_carry_distance = 5
             # feet_clearance = 0
             # feet_contact_number = 0
             # # gait
