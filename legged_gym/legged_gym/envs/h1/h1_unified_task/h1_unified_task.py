@@ -10,6 +10,7 @@ from isaacgym import gymapi, gymtorch
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.terrain import XBotTerrain
 from collections import deque
+from legged_gym.utils.human import sample_int_from_float, sample_rp
 
 
 class H1UnifiedTask(LeggedRobot):
@@ -86,6 +87,7 @@ class H1UnifiedTask(LeggedRobot):
         self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
         self.gym.simulate(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self._init_target_wp()
         self.compute_observations()
 
     def _push_robots(self):
@@ -124,6 +126,43 @@ class H1UnifiedTask(LeggedRobot):
         stance_mask[torch.abs(sin_pos) < 0.1] = 1
 
         return stance_mask
+
+    def _init_target_wp(self):
+        self.ori_wrist_pos = self.rigid_state[:, self.wrist_indices, :7].clone() # [num_envs, 2, 7], two hands
+        self.target_wp, self.num_pairs, self.num_wp = sample_rp(self.device, num_points=2000000, num_wp=10, ranges=self.cfg.commands.ranges) # relative, self.target_wp.shape=[num_pairs, num_wp, 2, 7]
+        self.target_wp_i = torch.randint(0, self.num_pairs, (self.num_envs,), device=self.device) # for each env, choose one seq, [num_envs]
+        self.target_wp_j = torch.zeros(self.num_envs, dtype=torch.long, device=self.device) # for each env, the timestep in the seq is initialized to 0, [num_envs]
+        self.target_wp_dt = 1 / self.cfg.human.freq
+        self.target_wp_update_steps = self.target_wp_dt / self.dt # not necessary integer
+        assert self.dt <= self.target_wp_dt, f"self.dt {self.dt} must be less than self.target_wp_dt {self.target_wp_dt}"
+        self.target_wp_update_steps_int = sample_int_from_float(self.target_wp_update_steps)
+        
+        self.ref_dof_pos = None
+        self.ref_wrist_pos = None
+        self.ref_action = self.default_dof_pos
+        self.delayed_obs_target_wp = None
+        self.delayed_obs_target_wp_steps = self.cfg.human.delay / self.target_wp_dt
+        self.delayed_obs_target_wp_steps_int = sample_int_from_float(self.delayed_obs_target_wp_steps)
+        self.update_target_wp(torch.tensor([], dtype=torch.long, device=self.device))
+
+
+    def update_target_wp(self, reset_env_ids):
+        # self.target_wp_i specifies which seq to use for each env, and self.target_wp_j specifies the timestep in the seq
+        self.ref_wrist_pos = self.target_wp[self.target_wp_i, self.target_wp_j] + self.ori_wrist_pos # [num_envs, 2, 7], two hands
+        self.delayed_obs_target_wp = self.target_wp[self.target_wp_i, torch.maximum(self.target_wp_j - self.delayed_obs_target_wp_steps_int, torch.tensor(0))]
+        resample_i = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        if self.common_step_counter % self.target_wp_update_steps_int == 0:
+            self.target_wp_j += 1
+            wp_eps_end_bool = self.target_wp_j >= self.num_wp
+            self.target_wp_j = torch.where(wp_eps_end_bool, torch.zeros_like(self.target_wp_j), self.target_wp_j)
+            resample_i[wp_eps_end_bool.nonzero(as_tuple=False).flatten()] = True
+            self.target_wp_update_steps_int = sample_int_from_float(self.target_wp_update_steps)
+            self.delayed_obs_target_wp_steps_int = sample_int_from_float(self.delayed_obs_target_wp_steps)
+        if self.cfg.human.resample_on_env_reset:
+            self.target_wp_j[reset_env_ids] = 0
+            resample_i[reset_env_ids] = True
+        self.target_wp_i = torch.where(resample_i, torch.randint(0, self.num_pairs, (self.num_envs,), device=self.device), self.target_wp_i)
+
 
     def create_sim(self):
         """ Creates simulation, terrain and evironments
@@ -291,12 +330,29 @@ class H1UnifiedTask(LeggedRobot):
         box_lift_asset = self.gym.create_box(self.sim, box_lift_size[0], box_lift_size[1], box_lift_size[2], asset_options)
         box_lift_pose = gymapi.Transform()
         self.box_lift_idxs = []
-
-        ## Task Reach
         
         ## Task Transfer
+        ### Front table asset
+        front_table_dims = gymapi.Vec3(*self.cfg.asset.front_table_dims)
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+        front_table_asset = self.gym.create_box(self.sim, front_table_dims.x, front_table_dims.y, front_table_dims.z, asset_options)
+        front_table_pose = gymapi.Transform()
+        self.front_table_idxs = []
+        ### Back table asset
+        back_table_dims = gymapi.Vec3(*self.cfg.asset.back_table_dims)
+        back_table_asset = self.gym.create_box(self.sim, back_table_dims.x, back_table_dims.y, back_table_dims.z, asset_options)
+        back_table_pose = gymapi.Transform()
+        self.back_table_idxs = []
+        ### Box transfer asset
+        box_transfer_size = self.cfg.asset.box_transfer_size
+        asset_options = gymapi.AssetOptions()
+        box_transfer_asset = self.gym.create_box(self.sim, box_transfer_size, box_transfer_size, box_transfer_size, asset_options)
+        box_transfer_pose = gymapi.Transform()
+        self.box_transfer_idxs = []
         
-        # Create Actors
+        # Create actors
         self.humanoid_idxs = []
         for i in range(self.num_envs):
             ## Create env instance
@@ -413,14 +469,34 @@ class H1UnifiedTask(LeggedRobot):
             self.gym.set_rigid_body_color(env_handle, box_lift_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
             self.box_lift_idxs.append(self.gym.get_actor_index(env_handle, box_lift_handle, gymapi.DOMAIN_SIM))
             
-            ## Task Reach
-            
             ## Task Transfer
+            ### Add front table
+            front_table_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.front_table_offset, device=self.device)))
+            front_table_handle = self.gym.create_actor(env_handle, front_table_asset, front_table_pose, "front_table", i, 0)
+            self.front_table_idxs.append(self.gym.get_actor_index(env_handle, front_table_handle, gymapi.DOMAIN_SIM))
+            ### Add back table
+            back_table_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.back_table_offset, device=self.device)))
+            back_table_handle = self.gym.create_actor(env_handle, back_table_asset, back_table_pose, "back_table", i, 0)
+            self.back_table_idxs.append(self.gym.get_actor_index(env_handle, back_table_handle, gymapi.DOMAIN_SIM))
+            ### Add box transfer
+            box_transfer_pose.p.x = front_table_pose.p.x + np.random.uniform(*self.cfg.asset.box_transfer_range_x)
+            box_transfer_pose.p.y = front_table_pose.p.y + np.random.uniform(*self.cfg.asset.box_transfer_range_y)
+            box_transfer_pose.p.z = front_table_pose.p.z + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * self.cfg.asset.box_transfer_size
+            # box_transfer_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
+            box_transfer_handle = self.gym.create_actor(env_handle, box_transfer_asset, box_transfer_pose, "box_transfer", i, 0)
+            ### change box actor properties
+            box_transfer_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_transfer_handle)
+            for prop in box_transfer_rigid_body_props:
+                prop.mass = self.cfg.asset.box_transfer_mass # change mass here!
+            ###
+            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+            self.gym.set_rigid_body_color(env_handle, box_transfer_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
+            self.box_transfer_idxs.append(self.gym.get_actor_index(env_handle, box_transfer_handle, gymapi.DOMAIN_SIM))
+
 
         self._create_sensors_all()
         self.humanoid_idxs = torch.tensor(self.humanoid_idxs, device=self.device)
 
-        # Initialize indices for different body parts
         ## Task ball
         self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device)
         self.door_idxs = torch.tensor(self.door_idxs, device=self.device)
@@ -435,8 +511,11 @@ class H1UnifiedTask(LeggedRobot):
         self.box_carry_idxs = torch.tensor(self.box_carry_idxs, device=self.device)
         ## Task lift
         self.box_lift_idxs = torch.tensor(self.box_lift_idxs, device=self.device)
-        ## Task reach
         ## Task transfer
+        self.front_table_idxs = torch.tensor(self.front_table_idxs, device=self.device)
+        self.back_table_idxs = torch.tensor(self.back_table_idxs, device=self.device)
+        self.box_transfer_idxs = torch.tensor(self.box_transfer_idxs, device=self.device)
+
 
         ### Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
@@ -504,8 +583,11 @@ class H1UnifiedTask(LeggedRobot):
         self.box_carry_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_carry_idxs[0]]
         # Task lift
         self.box_lift_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_lift_idxs[0]]
-        # Task reach
         # Task transfer
+        self.front_table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.front_table_idxs[0]]
+        self.back_table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.back_table_idxs[0]]
+        self.box_transfer_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_transfer_idxs[0]]
+
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         
@@ -638,8 +720,6 @@ class H1UnifiedTask(LeggedRobot):
         self._reset_task_carry(env_ids)
         ## Task lift
         self._reset_task_lift(env_ids)
-        ## Task reach
-        self._reset_task_reach(env_ids)
         ## Task transfer
         self._reset_task_transfer(env_ids)
         
@@ -659,8 +739,10 @@ class H1UnifiedTask(LeggedRobot):
         box_carry_ids_int32 = self.box_carry_idxs[env_ids].to(dtype=torch.int32)
         ## Task lift
         box_lift_ids_int32 = self.box_lift_idxs[env_ids].to(dtype=torch.int32)
-        ## Task reach
         ## Task transfer
+        front_table_ids_int32 = self.front_table_idxs[env_ids].to(dtype=torch.int32)
+        back_table_ids_int32 = self.back_table_idxs[env_ids].to(dtype=torch.int32)
+        box_transfer_ids_int32 = self.box_transfer_idxs[env_ids].to(dtype=torch.int32)
         
         all_actor_indices = torch.cat([
             humanoid_ids_int32,
@@ -672,6 +754,9 @@ class H1UnifiedTask(LeggedRobot):
             arti_obj_ids_int32,
             box_carry_ids_int32,
             box_lift_ids_int32,
+            front_table_ids_int32,
+            back_table_ids_int32,
+            box_transfer_ids_int32
         ])
         self.gym.set_actor_root_state_tensor_indexed(
             self.sim,
@@ -846,21 +931,50 @@ class H1UnifiedTask(LeggedRobot):
             self.box_lift_root_states[inactive_ids, 2] = self.hidden_z
             self.box_lift_root_states[inactive_ids, 7:13] = 0
 
-    def _reset_task_reach(self, env_ids):
-        pass
-
     def _reset_task_transfer(self, env_ids):
-        pass
+        task_transfer_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
+
+        active_ids = env_ids[task_transfer_envs]
+        inactive_ids = env_ids[~task_transfer_envs]
+
+        if len(active_ids) > 0:
+            pos = self.env_origins[active_ids].clone()
+
+            # Reset front table
+            self.front_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.front_table_offset[0]
+            self.front_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.front_table_offset[1]
+            self.front_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.front_table_offset[2]
+            self.front_table_root_states[active_ids, 7:13] = 0
+
+            # Reset back table
+            self.back_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.back_table_offset[0]
+            self.back_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.back_table_offset[1]
+            self.back_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.back_table_offset[2]
+            self.back_table_root_states[active_ids, 7:13] = 0
+
+            # Reset box transfer
+            self.box_transfer_root_states[active_ids, 0] = self.front_table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_x).to(self.device)
+            self.box_transfer_root_states[active_ids, 1] = self.front_table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_y).to(self.device)
+            self.box_transfer_root_states[active_ids, 2] = self.front_table_root_states[active_ids, 2] + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * self.cfg.asset.box_transfer_size
+            self.box_transfer_root_states[active_ids, 3] = 1
+            self.box_transfer_root_states[active_ids, 4:] = 0
+
+            # Reset goal
+            self.box_transfer_goal_pos[active_ids, 0] = self.back_table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_x).to(self.device)
+            self.box_transfer_goal_pos[active_ids, 1] = self.back_table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_y).to(self.device)
+            self.box_transfer_goal_pos[active_ids, 2] = self.box_transfer_root_states[active_ids, 2]
+        
+        if len(inactive_ids) > 0:
+            self.front_table_root_states[inactive_ids, 2] = self.hidden_z
+            self.front_table_root_states[inactive_ids, 7:13] = 0
+
+            self.back_table_root_states[inactive_ids, 2] = self.hidden_z
+            self.back_table_root_states[inactive_ids, 7:13] = 0
+
+            self.box_transfer_root_states[inactive_ids, 2] = self.hidden_z
+            self.box_transfer_root_states[inactive_ids, 7:13] = 0
 
     def step(self, actions):
-        # if self.cfg.env.use_ref_actions:
-        #     actions += self.ref_action
-        # # dynamic randomization
-        # # delay = torch.rand((self.num_envs, 1), device=self.device)
-        # delay = torch.rand((self.num_envs, 1), device=self.device)
-        # actions = (1 - delay) * actions.to(self.device) + delay * self.actions
-        # actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
-        # return super().step(actions)
         if self.cfg.env.use_ref_actions:
             actions += self.ref_action
         # dynamic randomization
@@ -919,7 +1033,7 @@ class H1UnifiedTask(LeggedRobot):
 
         # compute observations, rewards, resets, ...
         self.check_termination()
-        # self.compute_reward()
+        self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
         # self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)

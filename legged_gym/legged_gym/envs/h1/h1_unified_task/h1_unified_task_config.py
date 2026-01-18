@@ -3,7 +3,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        num_tasks = 6
+        num_tasks = 8
 
         TASK_BALL = 0
         TASK_BOX = 1
