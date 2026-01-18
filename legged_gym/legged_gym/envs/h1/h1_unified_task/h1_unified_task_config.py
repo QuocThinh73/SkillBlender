@@ -3,13 +3,19 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        num_tasks = 5
+        num_tasks = 6
 
         TASK_BALL = 0
         TASK_BOX = 1
         TASK_BUTTON = 2
         TASK_CABINET = 3
         TASK_CARRY = 4
+        TASK_LIFT = 5
+        TASK_REACH = 6
+        TASK_TRANSFER = 7
+
+    class human(LeggedRobotCfg.human):
+        freq = 1
 
     class env(LeggedRobotCfg.env):
         # change the observation dim
@@ -90,11 +96,32 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         arti_obj_scale = 0.5
 
         # Task carry
+        ## Box carry
         box_carry_size = [0.5, 0.1, 1.0]
         box_carry_offset_xy = [1.0, 0.0]
         box_carry_range_x = [-0.5, -0.3]
         box_carry_range_y = [-0.05, 0.05]
         box_carry_range_mass = [0.1, 2.0]
+
+        # Task lift
+        ## Box lift
+        box_lift_size = [0.5, 0.1, 1.0]
+        box_lift_offset_xy = [1.0, 0.0]
+        box_lift_range_x = [-0.5, -0.3]
+        box_lift_range_y = [-0.05, 0.05]
+        box_lift_range_mass = [0.1, 2.0]
+
+        # Task transfer
+        ## Table
+        front_table_dims = [0.9, 1.5, 0.05]
+        front_table_offset = [1.0, 0.0, 0.975]
+        back_table_dims = [0.9, 1.5, 0.05]
+        back_table_offset = [-1.0, 0.0, 0.975]
+        ## Box transfer
+        box_transfer_size = 0.1
+        box_transfer_mass = 0.01
+        box_transfer_range_x = [-0.45, -0.35]
+        box_transfer_range_y = [-0.3, 0.3]
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
@@ -239,6 +266,32 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             box_carry_pos_x = [0.3, 1.0]
             box_carry_pos_y = [-0.3, 0.3]
             box_carry_pos_z = [0.3, 0.6] # maybe too large?
+            # Task lift
+            # box goal pos command ranges
+            box_lift_pos_z = [0.3, 0.6] # maybe too large?
+            # Task reach
+            # wrist pos command ranges
+            wrist_max_radius = 0.25
+            l_wrist_pos_x = [-0.10, 0.25]
+            l_wrist_pos_y = [-0.10, 0.25]
+            l_wrist_pos_z = [-0.25, 0.25]
+            r_wrist_pos_x = [-0.10, 0.25]
+            r_wrist_pos_y = [-0.25, 0.10]
+            r_wrist_pos_z = [-0.25, 0.25]
+            # center
+            max_center_distance = 2
+            center_offset_x = [-2, 2]
+            center_offset_y = [-2, 2]
+            center_offset_z = [-0.5, 0.5]
+            # Task transfer
+            # wrist pos command ranges
+            wrist_max_radius = 0.25
+            l_wrist_pos_x = [-0.10, 0.25]
+            l_wrist_pos_y = [-0.10, 0.25]
+            l_wrist_pos_z = [-0.25, 0.25]
+            r_wrist_pos_x = [-0.10, 0.25]
+            r_wrist_pos_y = [-0.25, 0.10]
+            r_wrist_pos_z = [-0.25, 0.25]
 
     class rewards(LeggedRobotCfg.rewards):
         base_height_target = 0.89
@@ -273,6 +326,14 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             # Task carry
             box_carry_pos = 5
             wrist_box_carry_distance = 5
+            # Task lift
+            box_lift_pos = 5
+            wrist_box_lift_distance = 5
+            # Task reach
+            wrist_pos = 5
+            # Task transfer
+            box_transfer_pos = 5
+            wrist_box_transfer_distance = 1
             # feet_clearance = 0
             # feet_contact_number = 0
             # # gait

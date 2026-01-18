@@ -283,7 +283,15 @@ class H1UnifiedTask(LeggedRobot):
         self.box_carry_idxs = []
 
         ## Task Lift
-        
+        ### Box lift asset
+        box_lift_size = self.cfg.asset.box_lift_size
+        asset_options = gymapi.AssetOptions()
+        # asset_options.density = self.cfg.asset.density * 0.5 # no need to do this, will change mass below
+        # add rigid shape properties if needed (e.g. friction)
+        box_lift_asset = self.gym.create_box(self.sim, box_lift_size[0], box_lift_size[1], box_lift_size[2], asset_options)
+        box_lift_pose = gymapi.Transform()
+        self.box_lift_idxs = []
+
         ## Task Reach
         
         ## Task Transfer
@@ -368,7 +376,7 @@ class H1UnifiedTask(LeggedRobot):
             box_carry_pose.p.y += self.cfg.asset.box_carry_offset_xy[1] + np.random.uniform(*self.cfg.asset.box_carry_range_y)
             box_carry_pose.p.z = 0.5 * box_carry_size[2]
             # box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            box_carry_handle = self.gym.create_actor(env_handle, box_asset, box_carry_pose, "box_carry", i, 0)
+            box_carry_handle = self.gym.create_actor(env_handle, box_carry_asset, box_carry_pose, "box_carry", i, 0)
             ### change box actor properties
             box_carry_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_carry_handle)
             for prop in box_carry_rigid_body_props:
@@ -383,8 +391,27 @@ class H1UnifiedTask(LeggedRobot):
             self.gym.set_rigid_body_color(env_handle, box_carry_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
             self.box_carry_idxs.append(self.gym.get_actor_index(env_handle, box_carry_handle, gymapi.DOMAIN_SIM))
 
-
             ## Task Lift
+            ### Add box lift
+            box_lift_pose.p = gymapi.Vec3(*pos[:3])
+            box_lift_pose.p.x += self.cfg.asset.box_lift_offset_xy[0] + np.random.uniform(*self.cfg.asset.box_lift_range_x)
+            box_lift_pose.p.y += self.cfg.asset.box_lift_offset_xy[1] + np.random.uniform(*self.cfg.asset.box_lift_range_y)
+            box_lift_pose.p.z = 0.5 * box_lift_size[2]
+            # box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
+            box_lift_handle = self.gym.create_actor(env_handle, box_lift_asset, box_lift_pose, "box_lift", i, 0)
+            ### change box actor properties
+            box_lift_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_lift_handle)
+            for prop in box_lift_rigid_body_props:
+                prop.mass = random.uniform(*self.cfg.asset.box_lift_range_mass) # change mass here!
+            self.gym.set_actor_rigid_body_properties(env_handle, box_lift_handle, box_lift_rigid_body_props, recomputeInertia=True)
+            box_lift_rigid_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, box_lift_handle)
+            for prop in box_lift_rigid_shape_props:
+                prop.friction = 5. # change friction here!
+            self.gym.set_actor_rigid_shape_properties(env_handle, box_lift_handle, box_lift_rigid_shape_props)
+            ###
+            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+            self.gym.set_rigid_body_color(env_handle, box_lift_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
+            self.box_lift_idxs.append(self.gym.get_actor_index(env_handle, box_lift_handle, gymapi.DOMAIN_SIM))
             
             ## Task Reach
             
@@ -406,6 +433,10 @@ class H1UnifiedTask(LeggedRobot):
         self.arti_obj_idxs = torch.tensor(self.arti_obj_idxs, device=self.device)
         ## Task carry
         self.box_carry_idxs = torch.tensor(self.box_carry_idxs, device=self.device)
+        ## Task lift
+        self.box_lift_idxs = torch.tensor(self.box_lift_idxs, device=self.device)
+        ## Task reach
+        ## Task transfer
 
         ### Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
@@ -471,6 +502,10 @@ class H1UnifiedTask(LeggedRobot):
         self.arti_obj_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.arti_obj_idxs[0]]
         # Task carry
         self.box_carry_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_carry_idxs[0]]
+        # Task lift
+        self.box_lift_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_lift_idxs[0]]
+        # Task reach
+        # Task transfer
 
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         
@@ -601,6 +636,12 @@ class H1UnifiedTask(LeggedRobot):
         self._reset_task_cabinet(env_ids)
         ## Task carry
         self._reset_task_carry(env_ids)
+        ## Task lift
+        self._reset_task_lift(env_ids)
+        ## Task reach
+        self._reset_task_reach(env_ids)
+        ## Task transfer
+        self._reset_task_transfer(env_ids)
         
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
                 
@@ -616,6 +657,10 @@ class H1UnifiedTask(LeggedRobot):
         arti_obj_ids_int32 = self.arti_obj_idxs[env_ids].to(dtype=torch.int32)
         ## Task carry
         box_carry_ids_int32 = self.box_carry_idxs[env_ids].to(dtype=torch.int32)
+        ## Task lift
+        box_lift_ids_int32 = self.box_lift_idxs[env_ids].to(dtype=torch.int32)
+        ## Task reach
+        ## Task transfer
         
         all_actor_indices = torch.cat([
             humanoid_ids_int32,
@@ -626,6 +671,7 @@ class H1UnifiedTask(LeggedRobot):
             wall_ids_int32,
             arti_obj_ids_int32,
             box_carry_ids_int32,
+            box_lift_ids_int32,
         ])
         self.gym.set_actor_root_state_tensor_indexed(
             self.sim,
@@ -775,6 +821,37 @@ class H1UnifiedTask(LeggedRobot):
             self.box_carry_root_states[inactive_ids, 2] = self.hidden_z
             self.box_carry_root_states[inactive_ids, 7:13] = 0
 
+    def _reset_task_lift(self, env_ids):
+        task_lift_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_LIFT)
+
+        active_ids = env_ids[task_lift_envs]
+        inactive_ids = env_ids[~task_lift_envs]
+
+        if len(active_ids) > 0:
+            pos = self.env_origins[active_ids].clone()
+
+            # Reset box lift
+            self.box_lift_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.box_lift_offset_xy[0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_lift_range_x).to(self.device)
+            self.box_lift_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.box_lift_offset_xy[1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_lift_range_y).to(self.device)
+            self.box_lift_root_states[active_ids, 2] = 0.5 * self.cfg.asset.box_lift_size[2]
+            self.box_lift_root_states[active_ids, 3] = 1
+            self.box_lift_root_states[active_ids, 4:] = 0
+
+            # Reset goal
+            self.box_lift_goal_pos[active_ids, 0] = self.box_lift_root_states[active_ids, 0].clone()
+            self.box_lift_goal_pos[active_ids, 1] = self.box_lift_root_states[active_ids, 1].clone()
+            self.box_lift_goal_pos[active_ids, 2] = self.box_lift_root_states[active_ids, 2] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_lift_pos_z).to(self.device)
+
+        if len(inactive_ids) > 0:
+            self.box_lift_root_states[inactive_ids, 2] = self.hidden_z
+            self.box_lift_root_states[inactive_ids, 7:13] = 0
+
+    def _reset_task_reach(self, env_ids):
+        pass
+
+    def _reset_task_transfer(self, env_ids):
+        pass
+
     def step(self, actions):
         # if self.cfg.env.use_ref_actions:
         #     actions += self.ref_action
@@ -842,10 +919,10 @@ class H1UnifiedTask(LeggedRobot):
 
         # compute observations, rewards, resets, ...
         self.check_termination()
-        self.compute_reward()
+        # self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
-        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
+        # self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_last_actions[:] = torch.clone(self.last_actions[:])
         self.last_actions[:] = self.actions[:]
@@ -925,7 +1002,7 @@ class H1UnifiedTask(LeggedRobot):
         return torch.exp(-4 * wrist_box_error), wrist_box_error
     
     # Task button rewards
-    def _reward_wrist_pos(self):
+    def _reward_wrist_button_pos(self):
         wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
         wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
         wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
@@ -984,14 +1061,14 @@ class H1UnifiedTask(LeggedRobot):
         return torch.exp(-4 * wrist_pos_error), wrist_pos_error
     
     def _reward_box_carry_pos(self):
-        box_pos_diff = self.box_root_states[:, :3] - self.box_goal_pos
+        box_pos_diff = self.box_carry_root_states[:, :3] - self.box_goal_pos
         box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
         return torch.exp(-4 * box_pos_error), box_pos_error
 
     def _reward_wrist_box_carry_distance(self):
         wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
         wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-        box_pos = self.box_root_states[:, :3] # [num_envs, 3]
+        box_pos = self.box_carry_root_states[:, :3] # [num_envs, 3]
         box_handle_left = box_pos.clone()
         box_handle_right = box_pos.clone()
         # box_handle_left[:, 1] += 0.4 * self.cfg.asset.box_size[1]
@@ -1000,6 +1077,66 @@ class H1UnifiedTask(LeggedRobot):
         # box_handle_right[:, 2] += 0.25 * self.cfg.asset.box_size[2]
         box_handle_pos = torch.stack([box_handle_left, box_handle_right], dim=1) # [num_envs, 2, 3]
         wrist_box_diff = wrist_pos - box_handle_pos # [num_envs, 2, 3]
+        wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+        wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_box_error), wrist_box_error
+    
+    # Task lift rewards
+    def _reward_wrist_lift_pos(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
+        wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_pos_error), wrist_pos_error
+    
+    def _reward_box_lift_pos(self):
+        box_pos_diff = self.box_lift_root_states[:, :3] - self.box_goal_pos
+        box_pos_diff = box_pos_diff[:, 2:3] # only z axis
+        box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
+        return torch.exp(-4 * box_pos_error), box_pos_error
+
+    def _reward_wrist_box_lift_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        box_pos = self.box_lift_root_states[:, :3] # [num_envs, 3]
+        box_handle_left = box_pos.clone()
+        box_handle_right = box_pos.clone()
+        # box_handle_left[:, 1] += 0.4 * self.cfg.asset.box_size[1]
+        # box_handle_left[:, 2] += 0.25 * self.cfg.asset.box_size[2]
+        # box_handle_right[:, 1] -= 0.4 * self.cfg.asset.box_size[1]
+        # box_handle_right[:, 2] += 0.25 * self.cfg.asset.box_size[2]
+        box_handle_pos = torch.stack([box_handle_left, box_handle_right], dim=1) # [num_envs, 2, 3]
+        wrist_box_diff = wrist_pos - box_handle_pos # [num_envs, 2, 3]
+        wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+        wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_box_error), wrist_box_error
+
+    # Task reach rewards
+    def _reward_wrist_reach_pos(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
+        wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_pos_error), wrist_pos_error
+
+    # Task transfer rewards
+    def _reward_wrist_transfer_pos(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
+        wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+        return torch.exp(-4 * wrist_pos_error), wrist_pos_error
+    
+    def _reward_box_transfer_pos(self):
+        box_pos_diff = self.box_root_states[:, :3] - self.box_goal_pos
+        box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
+        return torch.exp(-4 * box_pos_error), box_pos_error
+    
+    def _reward_wrist_box_transfer_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+        wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+        box_pos = self.box_root_states[:, :3] # [num_envs, 3]
+        wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3]
         wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
         wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
         return torch.exp(-4 * wrist_box_error), wrist_box_error
