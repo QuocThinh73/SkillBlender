@@ -1069,16 +1069,15 @@ class H1UnifiedTask(LeggedRobot):
         task_one_hot = F.one_hot(self.task_ids, num_classes=self.num_tasks).float()
 
         common_obs_buf = torch.cat((
-            task_one_hot, # 8
             q,    # |A|
             dq,  # |A|
             self.actions,   # |A|
             self.base_ang_vel * self.obs_scales.ang_vel,  # 3
             self.base_euler_xyz * self.obs_scales.quat,  # 3
+            task_one_hot, # 8
         ), dim=-1)
 
         common_privileged_obs_buf = torch.cat((
-            task_one_hot, # 8
             (self.dof_pos - self.default_joint_pd_target) * \
             self.obs_scales.dof_pos,  # |A|
             self.dof_vel * self.obs_scales.dof_vel,  # |A|
@@ -1092,6 +1091,7 @@ class H1UnifiedTask(LeggedRobot):
             self.body_mass / 30.,  # 1
             # stance_mask,  # 2
             contact_mask,  # 2
+            task_one_hot, # 8
         ), dim=-1)
 
         task_specific_obs_buf = torch.zeros(self.num_envs, self.cfg.env.max_command_dim, device=self.device)
@@ -1446,7 +1446,8 @@ class H1UnifiedTask(LeggedRobot):
         self.task_ids[env_ids] = new_tasks
         
         # Cập nhật target waypoint cho task Reach (nếu cần)
-        self.update_target_wp(env_ids)
+        if hasattr(self, 'target_wp'):
+            self.update_target_wp(env_ids)
 
         # Reset History buffers của Actor/Critic để không bị nhiễu task cũ
         for i in range(self.obs_history.maxlen):
@@ -1458,7 +1459,7 @@ class H1UnifiedTask(LeggedRobot):
         # 5. LOGIC TỪ CLASS CHA (Post-processing & Bug fix)
         # ----------------------------------------------------------------------
         # Log metrics (từ hàm reward return)
-        self.extras["episode_metrics"] = deepcopy(self.episode_metrics)
+        # self.extras["episode_metrics"] = deepcopy(self.episode_metrics)
         
         # Log additional info
         if self.cfg.terrain.mesh_type == "trimesh":
