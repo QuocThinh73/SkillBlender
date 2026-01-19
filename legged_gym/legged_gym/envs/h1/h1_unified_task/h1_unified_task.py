@@ -3,6 +3,7 @@ import random
 import numpy as np
 import math
 import os
+import torch.nn.functional as F
 
 from isaacgym.torch_utils import *
 from legged_gym.envs.base.legged_robot import LeggedRobot, get_euler_xyz_tensor
@@ -1064,7 +1065,10 @@ class H1UnifiedTask(LeggedRobot):
         q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
         dq = self.dof_vel * self.obs_scales.dof_vel
 
+        task_one_hot = F.one_hot(self.task_ids, num_classes=self.num_tasks).float()
+
         common_obs_buf = torch.cat((
+            task_one_hot, # 8
             q,    # |A|
             dq,  # |A|
             self.actions,   # |A|
@@ -1073,6 +1077,7 @@ class H1UnifiedTask(LeggedRobot):
         ), dim=-1)
 
         common_privileged_obs_buf = torch.cat((
+            task_one_hot, # 8
             (self.dof_pos - self.default_joint_pd_target) * \
             self.obs_scales.dof_pos,  # |A|
             self.dof_vel * self.obs_scales.dof_vel,  # |A|

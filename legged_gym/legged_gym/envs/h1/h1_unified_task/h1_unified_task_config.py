@@ -24,10 +24,10 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         c_frame_stack = 3
         command_dim = 14
         max_command_dim = 14
-        num_single_obs = 3 * num_actions + 6 + max_command_dim # see `obs_buf = torch.cat(...)` for details
+        num_single_obs = 3 * num_actions + 14 + max_command_dim # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
         max_privileged_obs_dim = 42
-        single_num_privileged_obs = 3 * num_actions + 18 + max_privileged_obs_dim
+        single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
         num_envs = 16
