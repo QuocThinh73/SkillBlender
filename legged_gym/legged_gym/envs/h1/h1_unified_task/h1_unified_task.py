@@ -12,6 +12,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.terrain import XBotTerrain
 from collections import deque
 from legged_gym.utils.human import sample_int_from_float, sample_rp
+from copy import deepcopy
 
 
 class H1UnifiedTask(LeggedRobot):
@@ -1327,14 +1328,151 @@ class H1UnifiedTask(LeggedRobot):
         ball_goal_dist = torch.norm(ball_goal_diff, dim=1)
         self.reset_buf |= ball_goal_dist < self.cfg.commands.ranges.threshold
 
+    # def reset_idx(self, env_ids):
+    #     super().reset_idx(env_ids)
+    #     new_tasks = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
+    #     self.task_ids[env_ids] = new_tasks
+    #     for i in range(self.obs_history.maxlen):
+    #         self.obs_history[i][env_ids] *= 0
+    #     for i in range(self.critic_history.maxlen):
+    #         self.critic_history[i][env_ids] *= 0
+
     def reset_idx(self, env_ids):
-        super().reset_idx(env_ids)
+        """ Reset some environments.
+            Custom implementation to support Multi-task Logging and Task Resampling.
+        """
+        if len(env_ids) == 0:
+            return
+            
+        # ----------------------------------------------------------------------
+        # 1. LOGIC TỪ CLASS CHA (Curriculum & Physics Reset)
+        # ----------------------------------------------------------------------
+        # Update curriculum
+        if self.cfg.terrain.curriculum:
+            self._update_terrain_curriculum(env_ids)
+        # Avoid updating command curriculum at each step
+        if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length == 0):
+            self.update_command_curriculum(env_ids)
+        
+        # Reset robot states (Gọi các hàm con của class hiện tại)
+        self._reset_dofs(env_ids)
+        self._reset_root_states(env_ids)
+        self._resample_commands(env_ids)
+
+        # Reset buffers
+        self.last_last_actions[env_ids] = 0.
+        self.actions[env_ids] = 0.
+        self.last_actions[env_ids] = 0.
+        self.last_rigid_state[env_ids] = 0.
+        self.last_dof_vel[env_ids] = 0.
+        self.feet_air_time[env_ids] = 0.
+        self.episode_length_buf[env_ids] = 0
+        self.reset_buf[env_ids] = 1
+
+        # ----------------------------------------------------------------------
+        # 2. LOGIC RIÊNG CỦA UNIFIED TASK (Custom Logging)
+        # ----------------------------------------------------------------------
+        self.extras["episode"] = {}
+        
+        # Danh sách tên task (đảm bảo đúng thứ tự ID 0->7 khớp với Config)
+        task_names = ["ball", "box", "button", "cabinet", "carry", "lift", "reach", "transfer"]
+
+        # A. Log Reward Chung (Average Global) - Để so sánh tổng quan
+        for key in self.episode_sums.keys():
+            self.extras["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
+
+        # B. Log Reward Riêng Theo Task (Chi tiết từng nhiệm vụ)
+        current_reset_tasks = self.task_ids[env_ids] # Lấy ID task của các env đang reset
+
+        for t_id, t_name in enumerate(task_names):
+            # --- Tạo key mặc định = 0.0 để tránh lỗi thiếu key trên WandB ---
+            self.extras["episode"][f'total_reward_{t_name}'] = 0.0
+            
+            # --- Định nghĩa các reward thành phần quan trọng theo từng task ---
+            # Tên key ở đây phải khớp với tên suffix của hàm reward (vd: _reward_ball_pos -> "ball_pos")
+            specific_keys = []
+            if t_name == "ball": 
+                specific_keys = ["ball_pos", "torso_pos"]
+            elif t_name == "box": 
+                specific_keys = ["box_pos", "wrist_pos", "wrist_box_distance"]
+            elif t_name == "button": 
+                specific_keys = ["wrist_button_pos", "wrist_button_distance", "right_arm_default"]
+            elif t_name == "cabinet": 
+                specific_keys = ["torso_arti_obj_distance", "wrist_arti_obj_distance", "arti_obj_dof"]
+            elif t_name == "carry": 
+                specific_keys = ["wrist_carry_pos", "box_carry_pos", "wrist_box_carry_distance"]
+            elif t_name == "lift": 
+                specific_keys = ["wrist_lift_pos", "box_lift_pos", "wrist_box_lift_distance"]
+            elif t_name == "reach": 
+                specific_keys = ["wrist_reach_pos"]
+            elif t_name == "transfer": 
+                specific_keys = ["wrist_transfer_pos", "box_transfer_pos", "wrist_box_transfer_distance"]
+            
+            # Init default cho specific keys
+            for k in specific_keys:
+                if k in self.episode_sums:
+                    self.extras["episode"][f'rew_{t_name}_{k}'] = 0.0
+
+            # --- Tính toán thực tế nếu có env thuộc task này reset ---
+            mask = (current_reset_tasks == t_id)
+            
+            if torch.any(mask):
+                ids = env_ids[mask]
+                
+                # 1. Tính Total Reward cho Task này
+                task_total_rew = torch.zeros(len(ids), device=self.device)
+                for key in self.episode_sums.keys():
+                    task_total_rew += self.episode_sums[key][ids]
+                
+                # Ghi đè giá trị thực
+                self.extras["episode"][f'total_reward_{t_name}'] = torch.mean(task_total_rew) / self.max_episode_length_s
+
+                # 2. Tính Specific Reward
+                for k in specific_keys:
+                    if k in self.episode_sums:
+                        self.extras["episode"][f'rew_{t_name}_{k}'] = torch.mean(self.episode_sums[k][ids]) / self.max_episode_length_s
+
+        # ----------------------------------------------------------------------
+        # 3. RESET REWARD SUMS (Sau khi đã log xong)
+        # ----------------------------------------------------------------------
+        for key in self.episode_sums.keys():
+            self.episode_sums[key][env_ids] = 0.
+
+        # ----------------------------------------------------------------------
+        # 4. RESAMPLE NEW TASKS (Logic chuyển đổi nhiệm vụ)
+        # ----------------------------------------------------------------------
+        # Random task mới cho các env vừa reset
         new_tasks = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
         self.task_ids[env_ids] = new_tasks
+        
+        # Cập nhật target waypoint cho task Reach (nếu cần)
+        self.update_target_wp(env_ids)
+
+        # Reset History buffers của Actor/Critic để không bị nhiễu task cũ
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
         for i in range(self.critic_history.maxlen):
             self.critic_history[i][env_ids] *= 0
+
+        # ----------------------------------------------------------------------
+        # 5. LOGIC TỪ CLASS CHA (Post-processing & Bug fix)
+        # ----------------------------------------------------------------------
+        # Log metrics (từ hàm reward return)
+        self.extras["episode_metrics"] = deepcopy(self.episode_metrics)
+        
+        # Log additional info
+        if self.cfg.terrain.mesh_type == "trimesh":
+            self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
+        if self.cfg.commands.curriculum:
+            self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
+        if self.cfg.env.send_timeouts:
+            self.extras["time_outs"] = self.time_out_buf
+            
+        # Fix reset gravity bug (Lấy lại root_states mới nhất)
+        _root_states = self.root_states if not hasattr(self, "humanoid_root_states") else self.humanoid_root_states
+        self.base_quat[env_ids] = _root_states[env_ids, 3:7]
+        self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
+        self.projected_gravity[env_ids] = quat_rotate_inverse(self.base_quat[env_ids], self.gravity_vec[env_ids])
 
 # ================================================ Rewards ================================================== #
     
