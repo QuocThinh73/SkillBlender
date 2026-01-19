@@ -1049,11 +1049,264 @@ class H1UnifiedTask(LeggedRobot):
 
     def compute_observations(self):
         self.compute_visual_observations()
-
+        
         phase = self._get_phase()
-
         sin_pos = torch.sin(2 * torch.pi * phase).unsqueeze(1)
         cos_pos = torch.cos(2 * torch.pi * phase).unsqueeze(1)
+
+        stance_mask = self._get_gait_phase()
+        contact_mask = self.contact_forces[:, self.feet_indices, 2] > 5.
+
+        self.command_input = torch.cat(
+            (sin_pos, cos_pos, self.commands[:, :3] * self.commands_scale), dim=1)
+        self.command_input_wo_clock = self.commands[:, :3] * self.commands_scale
+
+        q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
+        dq = self.dof_vel * self.obs_scales.dof_vel
+
+        common_obs_buf = torch.cat((
+            q,    # |A|
+            dq,  # |A|
+            self.actions,   # |A|
+            self.base_ang_vel * self.obs_scales.ang_vel,  # 3
+            self.base_euler_xyz * self.obs_scales.quat,  # 3
+        ), dim=-1)
+
+        common_privileged_obs_buf = torch.cat((
+            (self.dof_pos - self.default_joint_pd_target) * \
+            self.obs_scales.dof_pos,  # |A|
+            self.dof_vel * self.obs_scales.dof_vel,  # |A|
+            self.actions,  # |A|
+            self.base_lin_vel * self.obs_scales.lin_vel,  # 3
+            self.base_ang_vel * self.obs_scales.ang_vel,  # 3
+            self.base_euler_xyz * self.obs_scales.quat,  # 3
+            self.rand_push_force[:, :2],  # 2
+            self.rand_push_torque,  # 3
+            self.env_frictions,  # 1
+            self.body_mass / 30.,  # 1
+            # stance_mask,  # 2
+            contact_mask,  # 2
+        ), dim=-1)
+
+        task_specific_obs_buf = torch.zeros(self.num_envs, self.cfg.env.max_command_dim, device=self.device)
+        task_specific_privileged_obs_buf = torch.zeros(self.num_envs, self.cfg.env.max_privileged_obs_dim, device=self.device)
+
+        # Task ball observations
+        task_ball_mask = (self.task_ids == self.cfg.task.TASK_BALL)
+        if torch.any(task_ball_mask):
+            ball_pos = self.ball_root_states[task_ball_mask, :3]
+            torso_pos = self.rigid_state[task_ball_mask, self.torso_indices, :3].squeeze(1)
+            ball_goal_diff = ball_pos - self.goal_pos[task_ball_mask]
+            root_ball_diff = torso_pos - ball_pos
+
+            goal_pos_obs = torch.flatten(self.goal_pos[task_ball_mask], start_dim=1) # [num_envs, 3]
+            ball_pos_obs = torch.flatten(ball_pos, start_dim=1) # [num_envs, 3]
+            torso_pos_obs = torch.flatten(torso_pos, start_dim=1) # [num_envs, 3]
+            ball_goal_diff_obs = torch.flatten(ball_goal_diff, start_dim=1) # [num_envs, 3]
+            root_ball_diff_obs = torch.flatten(root_ball_diff, start_dim=1) # [num_envs, 3]
+
+            task_ball_obs = torch.cat((ball_goal_diff_obs, root_ball_diff_obs), dim=-1)
+            task_specific_obs_buf[task_ball_mask, :6] = task_ball_obs
+
+            task_ball_privileged_obs = torch.cat((
+                goal_pos_obs, # 3
+                ball_pos_obs, # 3
+                torso_pos_obs, # 3
+                ball_goal_diff_obs,  # 3
+                root_ball_diff_obs,  # 3
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_ball_mask, :15] = task_ball_privileged_obs
+
+        # Task box observations
+        task_box_mask = (self.task_ids == self.cfg.task.TASK_BOX)
+        if torch.any(task_box_mask):
+            wrist_pos = self.rigid_state[task_box_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+            box_pos = self.box_root_states[task_box_mask, :3]
+            diff = box_pos - self.box_goal_pos[task_box_mask]
+            wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
+            
+            wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
+            wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_box_mask], start_dim=1) # [num_envs, 3]
+            box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
+            diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
+
+            task_box_obs = torch.cat((diff_obs, wrist_box_diff_obs), dim=-1)
+            task_specific_obs_buf[task_box_mask, :9] = task_box_obs
+
+            task_box_privileged_obs = torch.cat((
+                box_goal_pos_obs, # 3
+                box_pos_obs, # 3
+                diff_obs,  # 3
+                wrist_pos_obs, # 6
+                wrist_box_diff_obs, # 6
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_box_mask, :21] = task_box_privileged_obs
+
+        # Task button observations
+        task_button_mask = (self.task_ids == self.cfg.task.TASK_BUTTON)
+        if torch.any(task_button_mask):
+            wrist_pos = self.rigid_state[task_button_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos = wrist_pos[:, 0, :3] # [num_envs, 3], left hand, position only
+            button_goal_pos = self.button_goal_pos[task_button_mask, :3] # [num_envs, 3]
+            wrist_button_diff = wrist_pos - button_goal_pos # [num_envs, 3], left hand, position only
+
+            task_button_obs = wrist_button_diff
+            task_specific_obs_buf[task_button_mask, :3] = task_button_obs
+
+            task_button_privileged_obs = torch.cat((
+                button_goal_pos, # 3
+                wrist_pos, # 3
+                wrist_button_diff, # 3
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_button_mask, :9] = task_button_privileged_obs
+
+        # Task cabinet observations
+        task_cabinet_mask = (self.task_ids == self.cfg.task.TASK_CABINET)
+        if torch.any(task_cabinet_mask):
+            wrist_pos = self.rigid_state[task_cabinet_mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
+            # torso_pos = self.rigid_state[task_cabinet_mask, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
+            arti_obj_pos = self.arti_obj_root_states[task_cabinet_mask, :3] # [num_envs, 3]
+            arti_obj_dof_pos = self.arti_obj_dof_state[task_cabinet_mask, :, 0] # [num_envs, 2]
+            arti_obj_dof_goal = self.arti_obj_dof_goal # 0
+            arti_obj_dof_diff_obs = arti_obj_dof_pos - arti_obj_dof_goal # [num_envs, 2]
+            wrist_arti_obj_diff = wrist_pos - arti_obj_pos.unsqueeze(1) # [num_envs, 2, 3]
+            wrist_arti_obj_diff_obs = torch.flatten(wrist_arti_obj_diff, start_dim=1) # [num_envs, 6]
+
+            task_cabinet_obs = torch.cat((arti_obj_dof_diff_obs, wrist_arti_obj_diff_obs), dim=-1)
+            task_specific_obs_buf[task_cabinet_mask, :8] = task_cabinet_obs
+
+            task_cabinet_privileged_obs = torch.cat((
+                arti_obj_dof_diff_obs, # 2
+                wrist_arti_obj_diff_obs, # 6
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_cabinet_mask, :8] = task_cabinet_privileged_obs
+
+        # Task carry observations
+        task_carry_mask = (self.task_ids == self.cfg.task.TASK_CARRY)
+        if torch.any(task_carry_mask):
+            wrist_pos = self.rigid_state[task_carry_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+            box_pos = self.box_root_states[task_carry_mask, :3]
+            diff = box_pos - self.box_goal_pos[task_carry_mask]
+            wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
+            
+            wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
+            wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_carry_mask], start_dim=1) # [num_envs, 3]
+            box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
+            diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
+
+            task_carry_obs = torch.cat((diff_obs, wrist_box_diff_obs), dim=-1)
+            task_specific_obs_buf[task_carry_mask, :9] = task_carry_obs
+
+            task_carry_privileged_obs = torch.cat((
+                box_goal_pos_obs, # 3
+                box_pos_obs, # 3
+                diff_obs,  # 3
+                wrist_pos_obs, # 6
+                wrist_box_diff_obs, # 6
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_carry_mask, :21] = task_carry_privileged_obs
+
+
+        # Task lift observations
+        task_lift_mask = (self.task_ids == self.cfg.task.TASK_LIFT)
+        if torch.any(task_lift_mask):
+            wrist_pos = self.rigid_state[task_lift_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+            box_pos = self.box_root_states[task_lift_mask, :3]
+            diff = box_pos - self.box_goal_pos[task_lift_mask]
+            wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
+            
+            wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
+            wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_lift_mask], start_dim=1) # [num_envs, 3]
+            box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
+            diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
+
+            task_lift_obs = torch.cat((diff_obs, wrist_box_diff_obs), dim=-1)
+            task_specific_obs_buf[task_lift_mask, :9] = task_lift_obs
+
+            task_lift_privileged_obs = torch.cat((
+                box_goal_pos_obs, # 3
+                box_pos_obs, # 3
+                diff_obs,  # 3
+                wrist_pos_obs, # 6
+                wrist_box_diff_obs, # 6
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_lift_mask, :21] = task_lift_privileged_obs
+
+
+        # Task reach observations
+        task_reach_mask = (self.task_ids == self.cfg.task.TASK_REACH)
+        if torch.any(task_reach_mask):
+            wrist_pos = self.rigid_state[task_reach_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            diff = wrist_pos - self.ref_wrist_pos[task_reach_mask] # [num_envs, 2, 7], two hands
+
+            ref_wrist_pos_obs = torch.flatten(self.ref_wrist_pos[task_reach_mask], start_dim=1) # [num_envs, 14]
+            wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 14]
+            diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 14]
+
+            task_reach_obs = diff_obs
+            task_specific_obs_buf[task_reach_mask, :14] = task_reach_obs
+
+            task_reach_privileged_obs = torch.cat((
+                ref_wrist_pos_obs,  # 14
+                wrist_pos_obs,  # 14
+                diff_obs,  # 14
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_reach_mask, :42] = task_reach_privileged_obs
+
+        # Task transfer observations
+        task_transfer_mask = (self.task_ids == self.cfg.task.TASK_TRANSFER)
+        if torch.any(task_transfer_mask):
+            wrist_pos = self.rigid_state[task_transfer_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
+            box_pos = self.box_root_states[task_transfer_mask, :3]
+            diff = box_pos - self.box_goal_pos[task_transfer_mask]
+            wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
+            
+            wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
+            wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
+            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_transfer_mask], start_dim=1) # [num_envs, 3]
+            box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
+            diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
+
+            task_transfer_obs = torch.cat((diff_obs, wrist_box_diff_obs), dim=-1)
+            task_specific_obs_buf[task_transfer_mask, :9] = task_transfer_obs
+
+            task_transfer_privileged_obs = torch.cat((
+                box_goal_pos_obs, # 3
+                box_pos_obs, # 3
+                diff_obs,  # 3
+                wrist_pos_obs, # 6
+                wrist_box_diff_obs, # 6
+            ), dim=-1)
+            task_specific_privileged_obs_buf[task_transfer_mask, :21] = task_transfer_privileged_obs
+
+        # Concat
+        obs_buf = torch.cat((common_obs_buf, task_specific_obs_buf), dim=-1)
+        self.privileged_obs_buf = torch.cat((common_privileged_obs_buf, task_specific_privileged_obs_buf), dim=-1)
+
+        if self.cfg.terrain.measure_heights:
+            heights = torch.clip(self.humanoid_root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
+            self.privileged_obs_buf = torch.cat((self.obs_buf, heights), dim=-1)
+        
+        if self.add_noise:  
+            obs_now = obs_buf.clone() + torch.randn_like(obs_buf) * self.noise_scale_vec
+        else:
+            obs_now = obs_buf.clone()
+        self.obs_history.append(obs_now)
+        self.critic_history.append(self.privileged_obs_buf)
+
+
+        obs_buf_all = torch.stack([self.obs_history[i]
+                                   for i in range(self.obs_history.maxlen)], dim=1)  # N,T,K
+
+        self.obs_buf = obs_buf_all.reshape(self.num_envs, -1)  # N, T*K
+        self.privileged_obs_buf = torch.cat([self.critic_history[i] for i in range(self.cfg.env.c_frame_stack)], dim=1)
 
     def check_termination(self):
         """ Check if environments need to be reset

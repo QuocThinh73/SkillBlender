@@ -22,14 +22,16 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         num_actions = 19
         frame_stack = 1
         c_frame_stack = 3
-        command_dim = 8
-        num_single_obs = 3 * num_actions + 6 + command_dim # see `obs_buf = torch.cat(...)` for details
+        command_dim = 14
+        max_command_dim = 14
+        num_single_obs = 3 * num_actions + 6 + max_command_dim # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
-        single_num_privileged_obs = 3 * num_actions + 18 + 8
+        max_privileged_obs_dim = 42
+        single_num_privileged_obs = 3 * num_actions + 18 + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
         num_envs = 16
-        episode_length_s = 8  # episode length in seconds
+        episode_length_s = 24  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
 
@@ -308,9 +310,6 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
 
         class scales:
-            # TODO: 1. stand_still 2. joint_pos*2 3. add command input
-            # reference motion tracking
-            # joint_pos = 5
             # Task ball
             torso_pos = 1
             ball_pos = 5
@@ -334,38 +333,6 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             # Task transfer
             box_transfer_pos = 5
             wrist_box_transfer_distance = 1
-            # feet_clearance = 0
-            # feet_contact_number = 0
-            # # gait
-            # feet_air_time = 0
-            # foot_slip = -0.05
-            # feet_distance = 0.5
-            # knee_distance = 0.2
-            # # elbow_distance = 0.4
-            # # elbow_torso_distance = 0.4
-            # # contact
-            # feet_contact_forces = -0.01
-            # # vel tracking
-            # tracking_lin_vel = 0.
-            # tracking_ang_vel = 0.
-            # vel_mismatch_exp = 0.5  # lin_z; ang x,y
-            # low_speed = 0.2
-            # track_vel_hard = 0.5 * 2
-            # # base pos
-            # default_joint_pos = 0.5
-            # upper_body_pos = 0.5
-            # orientation = 1.
-            # base_height = 0.2
-            # base_acc = 0.2
-            # energy
-            # action_smoothness = -0.002
-            # torques = -1e-5
-            # dof_vel = -5e-4
-            # dof_acc = -1e-7
-            # collision = -0.2
-            #### humanplus ####
-            # lin_vel_z = -0.1
-            # ang_vel_xy = -0.1
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False
@@ -377,4 +344,65 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             angle = 45 # camera angle
 
 class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
-    pass
+    seed = 5
+    runner_class_name = 'OnPolicyRunner'   # DWLOnPolicyRunner
+
+    class policy:
+        init_noise_std = 1.0
+        actor_hidden_dims = [512, 256, 128]
+        critic_hidden_dims = [768, 256, 128]
+        # HRL
+        num_dofs = H1UnifiedTaskCfg.env.num_actions
+        frame_stack = H1UnifiedTaskCfg.env.frame_stack
+        command_dim = H1UnifiedTaskCfg.env.command_dim
+        # Expert skills
+        skill_dict = {
+            'h1_walking': {
+                "experiment_name": "h1_walking",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-2, 2)
+            },
+            'h1_reaching': {
+                "experiment_name": "h1_reaching",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            },
+            'h1_squatting': {
+                "experiment_name": "h1_squatting",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            },
+            'h1_stepping': {
+                "experiment_name": "h1_stepping",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            }
+        }
+
+    class algorithm(LeggedRobotCfgPPO.algorithm):
+        entropy_coef = 0.001
+        learning_rate = 1e-5
+        num_learning_epochs = 2
+        gamma = 0.994
+        lam = 0.9
+        num_mini_batches = 4
+
+    class runner:
+        policy_class_name = 'ActorCriticHierarchical'
+        algorithm_class_name = 'PPO'
+        num_steps_per_env = 60  # per iteration
+        max_iterations = 100001 # 3001  # number of policy updates
+
+        # logging
+        save_interval = 1000  # check for potential saves every this many iterations
+        experiment_name = 'h1_task_box'
+        run_name = ''
+        # load and resume
+        resume = False
+        load_run = -1  # -1 = last run
+        checkpoint = -1  # -1 = last saved model
+        resume_path = None  # updated from load_run and ckpt
