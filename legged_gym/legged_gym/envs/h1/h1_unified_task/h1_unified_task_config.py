@@ -30,7 +30,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 16
+        num_envs = 1024
         episode_length_s = 24  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
@@ -395,7 +395,7 @@ class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
         policy_class_name = 'ActorCriticHierarchical'
         algorithm_class_name = 'PPO'
         num_steps_per_env = 60  # per iteration
-        max_iterations = 100001 # 3001  # number of policy updates
+        max_iterations = 15001 # 3001  # number of policy updates
 
         # logging
         save_interval = 1000  # check for potential saves every this many iterations
