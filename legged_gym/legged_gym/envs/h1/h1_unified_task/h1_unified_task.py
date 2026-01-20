@@ -1293,8 +1293,8 @@ class H1UnifiedTask(LeggedRobot):
             task_specific_privileged_obs_buf[task_transfer_mask, :21] = task_transfer_privileged_obs
 
         # Concat
-        obs_buf = torch.cat((common_obs_buf, task_specific_obs_buf), dim=-1)
-        self.privileged_obs_buf = torch.cat((common_privileged_obs_buf, task_specific_privileged_obs_buf), dim=-1)
+        obs_buf = torch.cat((task_specific_obs_buf, common_obs_buf), dim=-1)
+        self.privileged_obs_buf = torch.cat((task_specific_privileged_obs_buf, common_privileged_obs_buf), dim=-1)
 
         if self.cfg.terrain.measure_heights:
             heights = torch.clip(self.humanoid_root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
