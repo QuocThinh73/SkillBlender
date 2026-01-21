@@ -3,15 +3,26 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        num_tasks = 8
+        num_tasks = 3
 
-        TASK_BALL = 0
-        TASK_BOX = 1
-        TASK_BUTTON = 2
-        TASK_CABINET = 3
-        TASK_CARRY = 4
-        TASK_LIFT = 5
-        TASK_REACH = 6
+        # TASK_BALL = 0
+        # TASK_BOX = 1
+        # TASK_BUTTON = 2
+        # TASK_CABINET = 3
+        # TASK_CARRY = 4
+        # TASK_LIFT = 5
+        # TASK_REACH = 6
+        # TASK_TRANSFER = 7
+
+        # task_names = ["Ball", "Box", "Button", "Cabinet", "Carry", "Lift", "Reach", "Transfer"]
+
+        TASK_BUTTON = 0
+        TASK_CABINET = 1
+        TASK_REACH = 2
+        TASK_BALL = 3
+        TASK_BOX = 4
+        TASK_CARRY = 5
+        TASK_LIFT = 6
         TASK_TRANSFER = 7
 
     class human(LeggedRobotCfg.human):
@@ -23,13 +34,15 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         frame_stack = 1
         c_frame_stack = 3
         command_dim = 14
-        num_single_obs = 3 * num_actions + 14 + command_dim # q(19) + dq(19) + actions(19) + base_ang_vel(3) + base_euler_xyz(3) + task_one_hot(8) + task_specific(14)
+        # num_single_obs = 3 * num_actions + 14 + command_dim # q(19) + dq(19) + actions(19) + base_ang_vel(3) + base_euler_xyz(3) + task_one_hot(8) + task_specific(14)
+        num_single_obs = 3 * num_actions + 14 - 5 + command_dim 
         num_observations = int(frame_stack * num_single_obs)
         max_privileged_obs_dim = 42
-        single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
+        # single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
+        single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim - 5
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 4096
+        num_envs = 1024
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
@@ -253,12 +266,12 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
 
         class scales:
-            # Task ball
-            torso_pos = 1
-            ball_pos = 5
-            # Task box
-            box_pos = 5
-            wrist_box_distance = 5
+            # # Task ball
+            # torso_pos = 1
+            # ball_pos = 5
+            # # Task box
+            # box_pos = 5
+            # wrist_box_distance = 5
             # Task button
             wrist_button_distance = 5
             right_arm_default = 0.5
@@ -266,16 +279,16 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             wrist_cabinet_distance = 5
             cabinet_dof = 5
             # Task carry
-            box_carry_pos = 5
-            wrist_box_carry_distance = 5
-            # Task lift
-            box_lift_pos = 5
-            wrist_box_lift_distance = 5
+            # box_carry_pos = 5
+            # wrist_box_carry_distance = 5
+            # # Task lift
+            # box_lift_pos = 5
+            # wrist_box_lift_distance = 5
             # Task reach
             wrist_pos = 5
-            # Task transfer
-            box_transfer_pos = 5
-            wrist_box_transfer_distance = 1
+            # # Task transfer
+            # box_transfer_pos = 5
+            # wrist_box_transfer_distance = 1
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False

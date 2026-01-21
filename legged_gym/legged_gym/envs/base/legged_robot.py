@@ -111,7 +111,8 @@ class LeggedRobot(BaseTask):
             noise_level * self.obs_scales.dof_pos  # dof pos (q)
         noise_vec[:-6-3*num_dof] = 0.  # command
 
-        assert -6-8-3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
+        # assert -6-8-3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
+        assert -6-3-3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
         return noise_vec
 
     def step(self, actions):
