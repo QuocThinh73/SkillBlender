@@ -62,6 +62,7 @@ class H1UnifiedTask(LeggedRobot):
         # Task ball
         self.ori_ball_pos = torch.zeros(self.num_envs, 3, device=self.device)
         self.goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
         door_z_offsets = [offset[2] for offset in self.cfg.asset.door_offsets]
         self.door_z_offsets = torch.tensor(door_z_offsets, device=self.device)
         self.num_door_parts = len(self.cfg.asset.door_offsets)
@@ -146,7 +147,6 @@ class H1UnifiedTask(LeggedRobot):
         self.delayed_obs_target_wp_steps_int = sample_int_from_float(self.delayed_obs_target_wp_steps)
         self.update_target_wp(torch.tensor([], dtype=torch.long, device=self.device))
 
-
     def update_target_wp(self, reset_env_ids):
         # self.target_wp_i specifies which seq to use for each env, and self.target_wp_j specifies the timestep in the seq
         self.ref_wrist_pos = self.target_wp[self.target_wp_i, self.target_wp_j] + self.ori_wrist_pos # [num_envs, 2, 7], two hands
@@ -163,7 +163,6 @@ class H1UnifiedTask(LeggedRobot):
             self.target_wp_j[reset_env_ids] = 0
             resample_i[reset_env_ids] = True
         self.target_wp_i = torch.where(resample_i, torch.randint(0, self.num_pairs, (self.num_envs,), device=self.device), self.target_wp_i)
-
 
     def create_sim(self):
         """ Creates simulation, terrain and evironments
@@ -1309,12 +1308,61 @@ class H1UnifiedTask(LeggedRobot):
         ball_pos = self.ball_root_states[:, :3]
         ball_goal_dist = torch.norm(ball_pos - self.goal_pos, dim=1)
 
-        self.reset_buf |= (is_ball_task & (ball_goal_dist < self.cfg.commands.ranges.threshold))
+        self.reset_buf |= (is_ball_task & (ball_goal_dist < self.cfg.commands.ranges.ball_threshold))
 
+    def _sample_goals(self, env_ids):
+        ball_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
+        if torch.any(ball_mask):
+            ball_env_ids = env_ids[ball_mask]
+            pos = self.env_origins[ball_env_ids]
+            self.goal_pos[ball_env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(ball_env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_x).to(self.device)
+            self.goal_pos[ball_env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(ball_env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_y).to(self.device)
+            self.goal_pos[ball_env_ids, 2] = torch.FloatTensor(len(ball_env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_z).to(self.device)
 
+        box_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BOX)
+        if torch.any(box_mask):
+            box_env_ids = env_ids[box_mask]
+            pos = self.env_origins[box_env_ids]
+            self.box_goal_pos[box_env_ids, 0] = self.small_box_root_states[box_env_ids, 0] + torch.FloatTensor(len(box_env_ids)).uniform_(*self.cfg.commands.ranges.small_box_pos_x).to(self.device)
+            self.box_goal_pos[box_env_ids, 1] = self.small_box_root_states[box_env_ids, 1] + torch.FloatTensor(len(box_env_ids)).uniform_(*self.cfg.commands.ranges.small_box_pos_y).to(self.device)
+            self.box_goal_pos[box_env_ids, 2] = self.small_box_root_states[box_env_ids, 2].clone()
+
+        button_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BUTTON)
+        if torch.any(button_mask):
+            button_env_ids = env_ids[button_mask]
+            pos = self.env_origins[button_env_ids]
+            self.button_goal_pos[button_env_ids, 0] = self.wall_root_states[button_env_ids, 0].clone()
+            self.button_goal_pos[button_env_ids, 1] = self.wall_root_states[button_env_ids, 1] + torch.FloatTensor(len(button_env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_y).to(self.device)
+            self.button_goal_pos[button_env_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(button_env_ids)).uniform_(*self.cfg.commands.ranges.button_pos_z).to(self.device)
+
+        carry_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_CARRY)
+        if torch.any(carry_mask):
+            carry_env_ids = env_ids[carry_mask]
+            pos = self.env_origins[carry_env_ids]
+            self.box_carry_goal_pos[carry_env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(carry_env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_x).to(self.device)
+            self.box_carry_goal_pos[carry_env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(carry_env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_y).to(self.device)
+            self.box_carry_goal_pos[carry_env_ids, 2] = self.big_box_root_states[carry_env_ids, 2].clone()
+
+        lift_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_LIFT)
+        if torch.any(lift_mask):
+            lift_env_ids = env_ids[lift_mask]
+            pos = self.env_origins[lift_env_ids]
+            self.box_lift_goal_pos[lift_env_ids, 0] = self.big_box_root_states[lift_env_ids, 0].clone()
+            self.box_lift_goal_pos[lift_env_ids, 1] = self.big_box_root_states[lift_env_ids, 1].clone()
+            self.box_lift_goal_pos[lift_env_ids, 2] = self.big_box_root_states[lift_env_ids, 2] + torch.FloatTensor(len(lift_env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_z).to(self.device)
+
+        transfer_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
+        if torch.any(transfer_mask):
+            transfer_env_ids = env_ids[transfer_mask]
+            pos = self.env_origins[transfer_env_ids]
+            self.box_transfer_goal_pos[transfer_env_ids, 0] = self.back_table_root_states[transfer_env_ids, 0] + torch.FloatTensor(len(transfer_env_ids)).uniform_(*self.cfg.asset.small_box_range_x).to(self.device)
+            self.box_transfer_goal_pos[transfer_env_ids, 1] = self.back_table_root_states[transfer_env_ids, 1] + torch.FloatTensor(len(transfer_env_ids)).uniform_(*self.cfg.asset.small_box_range_y).to(self.device)
+            self.box_transfer_goal_pos[transfer_env_ids, 2] = self.small_box_root_states[transfer_env_ids, 2]
+        
     def reset_idx(self, env_ids):
         self.task_ids[env_ids] = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
         super().reset_idx(env_ids)
+        self._sample_goals(env_ids)
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
         for i in range(self.critic_history.maxlen):

@@ -209,14 +209,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             lin_vel_y = [-0, 0]   # min max [m/s]
             ang_vel_yaw = [-0, 0]    # min max [rad/s]
             heading = [-0, 0]
-            # Task ball
-            ## goal, related to asset size
-            goal_x = [5.0, 5.0]
-            goal_y = [-2.0, 2.0]
-            goal_z = [0, 0.5]
-            threshold = 0.5
-            # Task box
-            ## wrist pos command ranges
+
             wrist_max_radius = 0.25
             l_wrist_pos_x = [-0.10, 0.25]
             l_wrist_pos_y = [-0.10, 0.25]
@@ -224,59 +217,26 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             r_wrist_pos_x = [-0.10, 0.25]
             r_wrist_pos_y = [-0.25, 0.10]
             r_wrist_pos_z = [-0.25, 0.25]
-            ## box goal pos command ranges
-            box_pos_x = [0, 0.1]
-            box_pos_y = [-0.5, 0.5]
-            # Task button
-            ## wrist pos command ranges
-            wrist_max_radius = 0.25
-            l_wrist_pos_x = [-0.10, 0.25]
-            l_wrist_pos_y = [-0.10, 0.25]
-            l_wrist_pos_z = [-0.25, 0.25]
-            r_wrist_pos_x = [-0.10, 0.25]
-            r_wrist_pos_y = [-0.25, 0.10]
-            r_wrist_pos_z = [-0.25, 0.25]
-            ## button pos command ranges
+
+            ball_goal_x = [5.0, 5.0]
+            ball_goal_y = [-2.0, 2.0]
+            ball_goal_z = [0, 0.5]
+            ball_threshold = 0.5
+
+            small_box_pos_x = [0, 0.1]
+            small_box_pos_y = [-0.5, 0.5]
+
             button_pos_y = [-0.5, 0.5]
             button_pos_z = [-0.5, 0.5]
-            # Task cabinet
-            wrist_max_radius = 0.25
-            l_wrist_pos_x = [-0.10, 0.25]
-            l_wrist_pos_y = [-0.10, 0.25]
-            l_wrist_pos_z = [-0.25, 0.25]
-            r_wrist_pos_x = [-0.10, 0.25]
-            r_wrist_pos_y = [-0.25, 0.10]
-            r_wrist_pos_z = [-0.25, 0.25]
-            # Task carry
-            box_carry_pos_x = [0.3, 1.0]
-            box_carry_pos_y = [-0.3, 0.3]
-            box_carry_pos_z = [0.3, 0.6] # maybe too large?
-            # Task lift
-            # box goal pos command ranges
-            box_lift_pos_z = [0.3, 0.6] # maybe too large?
-            # Task reach
-            # wrist pos command ranges
-            wrist_max_radius = 0.25
-            l_wrist_pos_x = [-0.10, 0.25]
-            l_wrist_pos_y = [-0.10, 0.25]
-            l_wrist_pos_z = [-0.25, 0.25]
-            r_wrist_pos_x = [-0.10, 0.25]
-            r_wrist_pos_y = [-0.25, 0.10]
-            r_wrist_pos_z = [-0.25, 0.25]
-            # center
+
+            big_box_pos_x = [0.3, 1.0]
+            big_box_pos_y = [-0.3, 0.3]
+            big_box_pos_z = [0.3, 0.6] 
+
             max_center_distance = 2
             center_offset_x = [-2, 2]
             center_offset_y = [-2, 2]
             center_offset_z = [-0.5, 0.5]
-            # Task transfer
-            # wrist pos command ranges
-            wrist_max_radius = 0.25
-            l_wrist_pos_x = [-0.10, 0.25]
-            l_wrist_pos_y = [-0.10, 0.25]
-            l_wrist_pos_z = [-0.25, 0.25]
-            r_wrist_pos_x = [-0.10, 0.25]
-            r_wrist_pos_y = [-0.25, 0.10]
-            r_wrist_pos_z = [-0.25, 0.25]
 
     class rewards(LeggedRobotCfg.rewards):
         base_height_target = 0.89
