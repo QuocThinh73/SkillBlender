@@ -742,6 +742,17 @@ class H1UnifiedTask(LeggedRobot):
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
                                               gymtorch.unwrap_tensor(cabinet_ids_int32), len(cabinet_ids_int32))
+        
+    def _reset_cabinet_dofs(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_CABINET)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+        
+        self.arti_obj_dof_state[active_ids, :, 0] = self.cfg.asset.arti_obj_dof_default
+        self.arti_obj_dof_state[active_ids, :, 1] = 0.0
+        self.arti_obj_dof_goal = 0
 
     def _reset_root_states(self, env_ids):
         """ Resets ROOT states position and velocities of selected environmments
@@ -764,6 +775,8 @@ class H1UnifiedTask(LeggedRobot):
             self.humanoid_root_states[env_ids, 7:13] = 0
             self.humanoid_root_states[env_ids, 2] += 1.8
         
+        self._hide_all_assets(env_ids)
+
         self._reset_door_states(env_ids)
         self._reset_ball_states(env_ids)
         self._reset_front_table_states(env_ids)
@@ -773,40 +786,26 @@ class H1UnifiedTask(LeggedRobot):
         self._reset_wall_states(env_ids)
         self._reset_cabinet_states(env_ids)
         
-        humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
-                
-        ## Task ball
-        ball_ids_int32 = self.ball_idxs[env_ids].to(dtype=torch.int32)
-        door_ids_int32 = self.door_idxs[env_ids].flatten().to(dtype=torch.int32)
-        ## Task box
-        box_ids_int32 = self.box_idxs[env_ids].to(dtype=torch.int32)
-        table_ids_int32 = self.table_idxs[env_ids].to(dtype=torch.int32)
-        ## Task button
-        wall_ids_int32 = self.wall_idxs[env_ids].to(dtype=torch.int32)
-        ## Task cabinet
-        arti_obj_ids_int32 = self.arti_obj_idxs[env_ids].to(dtype=torch.int32)
-        ## Task carry
-        box_carry_ids_int32 = self.box_carry_idxs[env_ids].to(dtype=torch.int32)
-        ## Task lift
-        box_lift_ids_int32 = self.box_lift_idxs[env_ids].to(dtype=torch.int32)
-        ## Task transfer
-        front_table_ids_int32 = self.front_table_idxs[env_ids].to(dtype=torch.int32)
-        back_table_ids_int32 = self.back_table_idxs[env_ids].to(dtype=torch.int32)
-        box_transfer_ids_int32 = self.box_transfer_idxs[env_ids].to(dtype=torch.int32)
+        humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
+        ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
+        door_ids_int32 = self.door_idxs[env_ids].flatten().to(torch.int32)
+        front_table_ids_int32 = self.front_table_idxs[env_ids].to(torch.int32)
+        back_table_ids_int32 = self.back_table_idxs[env_ids].to(torch.int32)
+        small_box_ids_int32 = self.small_box_idxs[env_ids].to(torch.int32)
+        big_box_ids_int32 = self.big_box_idxs[env_ids].to(torch.int32)
+        wall_ids_int32 = self.wall_idxs[env_ids].to(torch.int32)
+        cabinet_ids_int32 = self.cabinet_idxs[env_ids].to(torch.int32)
         
         all_actor_indices = torch.cat([
             humanoid_ids_int32,
             ball_ids_int32,
             door_ids_int32,
-            box_ids_int32,
-            table_ids_int32,
-            wall_ids_int32,
-            arti_obj_ids_int32,
-            box_carry_ids_int32,
-            box_lift_ids_int32,
             front_table_ids_int32,
             back_table_ids_int32,
-            box_transfer_ids_int32
+            small_box_ids_int32,
+            big_box_ids_int32,
+            wall_ids_int32,
+            cabinet_ids_int32,
         ])
         self.gym.set_actor_root_state_tensor_indexed(
             self.sim,
@@ -815,217 +814,151 @@ class H1UnifiedTask(LeggedRobot):
             len(all_actor_indices)
         )
 
-    def _reset_task_ball(self, env_ids):
-        task_ball_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
+    def _hide_all_assets(self, env_ids):
+        self.ball_root_states[env_ids, 2] = self.hidden_z
+        self.ball_root_states[env_ids, 7:13] = 0
 
-        active_ids = env_ids[task_ball_envs]
-        inactive_ids = env_ids[~task_ball_envs]
+        door_actor_ids = self.door_idxs[env_ids].flatten()
+        self.root_states[door_actor_ids, 2] = self.hidden_z
+        self.root_states[door_actor_ids, 7:13] = 0
 
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
+        self.front_table_root_states[env_ids, 2] = self.hidden_z
+        self.front_table_root_states[env_ids, 7:13] = 0
 
-            # Reset ball
-            self.ori_ball_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
-            self.ori_ball_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
-            self.ori_ball_pos[active_ids, 2] = 0.5 * self.cfg.asset.ball_size
-            self.ball_root_states[active_ids, :3] = self.ori_ball_pos[active_ids].clone()
-            self.ball_root_states[active_ids, 3] = 1
-            self.ball_root_states[active_ids, 4:] = 0
+        self.back_table_root_states[env_ids, 2] = self.hidden_z
+        self.back_table_root_states[env_ids, 7:13] = 0
 
-            # Reset door
-            active_door_indices = self.door_idxs[active_ids].flatten()
-            target_z_offsets = self.door_z_offsets.repeat(len(active_ids))
-            env_base_z = pos[:, 2].repeat_interleave(self.num_door_parts)
-            final_z = env_base_z + target_z_offsets
-            self.root_states[active_door_indices, 2] = final_z
-            self.root_states[active_door_indices, 7:13] = 0
+        self.small_box_root_states[env_ids, 2] = self.hidden_z
+        self.small_box_root_states[env_ids, 7:13] = 0
 
-            # Reset goal
-            self.goal_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_x).to(self.device)
-            self.goal_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_y).to(self.device)
-            self.goal_pos[active_ids, 2] = torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.goal_z).to(self.device)
+        self.big_box_root_states[env_ids, 2] = self.hidden_z
+        self.big_box_root_states[env_ids, 7:13] = 0
 
-        if len(inactive_ids) > 0:
-            self.ball_root_states[inactive_ids, 2] = self.hidden_z
-            self.ball_root_states[inactive_ids, 7:13] = 0
+        self.wall_root_states[env_ids, 2] = self.hidden_z
+        self.wall_root_states[env_ids, 7:13] = 0
 
-            inactive_door_indices = self.door_idxs[inactive_ids].flatten()
-            self.root_states[inactive_door_indices, 2] = self.hidden_z
-            self.root_states[inactive_door_indices, 7:13] = 0
+        self.cabinet_root_states[env_ids, 2] = self.hidden_z
+        self.cabinet_root_states[env_ids, 7:13] = 0
 
-    def _reset_task_box(self, env_ids):
-        task_box_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BOX)
+    def _reset_door_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
+        active_ids = env_ids[active_mask]
 
-        active_ids = env_ids[task_box_envs]
-        inactive_ids = env_ids[~task_box_envs]
-
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
-
-            # Reset table
-            self.table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.table_offset[0]
-            self.table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.table_offset[1]
-            self.table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.table_offset[2]
-            self.table_root_states[active_ids, 7:13] = 0
-
-            # Reset box
-            self.box_root_states[active_ids, 0] = self.table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_range_x).to(self.device)
-            self.box_root_states[active_ids, 1] = self.table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_range_y).to(self.device)
-            self.box_root_states[active_ids, 2] = self.table_root_states[active_ids, 2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.box_size
-            self.box_root_states[active_ids, 3] = 1
-            self.box_root_states[active_ids, 4:] = 0
-
-            # Reset goal
-            self.box_goal_pos[active_ids, 0] = self.box_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_pos_x).to(self.device)
-            self.box_goal_pos[active_ids, 1] = self.box_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_pos_y).to(self.device)
-            self.box_goal_pos[active_ids, 2] = self.box_root_states[active_ids, 2].clone()
-
-        if len(inactive_ids) > 0:
-            self.table_root_states[inactive_ids, 2] = self.hidden_z
-            self.table_root_states[inactive_ids, 7:13] = 0
-
-            self.box_root_states[inactive_ids, 2] = self.hidden_z
-            self.box_root_states[inactive_ids, 7:13] = 0
+        if len(active_ids) == 0:
+            return
         
-    def _reset_task_button(self, env_ids):
-        task_button_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_BUTTON)
+        pos = self.env_origins[active_ids].clone()
 
-        active_ids = env_ids[task_button_envs]
-        inactive_ids = env_ids[~task_button_envs]
+        active_door_indices = self.door_idxs[active_ids].flatten()
 
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
+        target_z_offsets = self.door_z_offsets.repeat(len(active_ids))
 
-            # Reset wall
-            self.wall_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offset[0]
-            self.wall_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offset[1]
-            self.wall_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.wall_offset[2]
-            self.wall_root_states[active_ids, 7:13] = 0
+        env_base_z = pos[:, 2].repeat_interleave(self.num_door_parts)
+        final_z = env_base_z + target_z_offsets
 
-            # Reset goal
-            self.button_goal_pos[active_ids, 0] = self.wall_root_states[active_ids, 0].clone()
-            self.button_goal_pos[active_ids, 1] = self.wall_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.button_pos_y).to(self.device)
-            self.button_goal_pos[active_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.button_pos_z).to(self.device)
+        self.root_states[active_door_indices, 2] = final_z
+        self.root_states[active_door_indices, 7:13] = 0.0
 
-        if len(inactive_ids) > 0:
-            self.wall_root_states[inactive_ids, 2] = self.hidden_z
-            self.wall_root_states[inactive_ids, 7:13] = 0
-       
-    def _reset_task_cabinet(self, env_ids):
-        self.arti_obj_dof_state[env_ids, :, 0] = self.cfg.asset.arti_obj_dof_default 
-        self.arti_obj_dof_state[env_ids, :, 1] = 0 
-        self.arti_obj_dof_goal = 0
+    def _reset_ball_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
+        active_ids = env_ids[active_mask]
 
-        task_cabinet_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_CABINET)
-
-        active_ids = env_ids[task_cabinet_envs]
-        inactive_ids = env_ids[~task_cabinet_envs]
-
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids]
-            active_indices = self.arti_obj_idxs[active_ids]
-            self.root_states[active_indices, 0] = pos[:, 0] + self.cfg.asset.arti_obj_offset[0]
-            self.root_states[active_indices, 1] = pos[:, 1] + self.cfg.asset.arti_obj_offset[1]
-            self.root_states[active_indices, 2] = pos[:, 2] + self.cfg.asset.arti_obj_offset[2]
-            self.root_states[active_indices, 7:13] = 0
-
-        if len(inactive_ids) > 0:
-            inactive_indices = self.arti_obj_idxs[inactive_ids]
-            self.root_states[inactive_indices, 2] = self.hidden_z
-            self.root_states[inactive_indices, 7:13] = 0
-
-    def _reset_task_carry(self, env_ids):
-        task_carry_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_CARRY)
-
-        active_ids = env_ids[task_carry_envs]
-        inactive_ids = env_ids[~task_carry_envs]
-
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
-
-            # Reset box carry
-            self.box_carry_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.box_carry_offset_xy[0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_carry_range_x).to(self.device)
-            self.box_carry_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.box_carry_offset_xy[1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_carry_range_y).to(self.device)
-            self.box_carry_root_states[active_ids, 2] = 0.5 * self.cfg.asset.box_carry_size[2]
-            self.box_carry_root_states[active_ids, 3] = 1
-            self.box_carry_root_states[active_ids, 4:] = 0
-
-            # Reset goal
-            self.box_carry_goal_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_carry_pos_x).to(self.device)
-            self.box_carry_goal_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_carry_pos_y).to(self.device)
-            self.box_carry_goal_pos[active_ids, 2] = self.box_carry_root_states[active_ids, 2].clone()
+        if len(active_ids) == 0:
+            return
         
-        if len(inactive_ids) > 0:
-            self.box_carry_root_states[inactive_ids, 2] = self.hidden_z
-            self.box_carry_root_states[inactive_ids, 7:13] = 0
+        pos = self.env_origins[active_ids].clone()
 
-    def _reset_task_lift(self, env_ids):
-        task_lift_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_LIFT)
+        self.ori_ball_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
+        self.ori_ball_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
+        self.ori_ball_pos[active_ids, 2] = 0.5 * self.cfg.asset.ball_size
 
-        active_ids = env_ids[task_lift_envs]
-        inactive_ids = env_ids[~task_lift_envs]
+        self.ball_root_states[active_ids, :3] = self.ori_ball_pos[active_ids].clone()
+        self.ball_root_states[active_ids, 3] = 1
+        self.ball_root_states[active_ids, 4:] = 0
 
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
+    def _reset_front_table_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BOX) | (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
+        active_ids = env_ids[active_mask]
 
-            # Reset box lift
-            self.box_lift_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.box_lift_offset_xy[0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_lift_range_x).to(self.device)
-            self.box_lift_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.box_lift_offset_xy[1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_lift_range_y).to(self.device)
-            self.box_lift_root_states[active_ids, 2] = 0.5 * self.cfg.asset.box_lift_size[2]
-            self.box_lift_root_states[active_ids, 3] = 1
-            self.box_lift_root_states[active_ids, 4:] = 0
-
-            # Reset goal
-            self.box_lift_goal_pos[active_ids, 0] = self.box_lift_root_states[active_ids, 0].clone()
-            self.box_lift_goal_pos[active_ids, 1] = self.box_lift_root_states[active_ids, 1].clone()
-            self.box_lift_goal_pos[active_ids, 2] = self.box_lift_root_states[active_ids, 2] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.commands.ranges.box_lift_pos_z).to(self.device)
-
-        if len(inactive_ids) > 0:
-            self.box_lift_root_states[inactive_ids, 2] = self.hidden_z
-            self.box_lift_root_states[inactive_ids, 7:13] = 0
-
-    def _reset_task_transfer(self, env_ids):
-        task_transfer_envs = (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
-
-        active_ids = env_ids[task_transfer_envs]
-        inactive_ids = env_ids[~task_transfer_envs]
-
-        if len(active_ids) > 0:
-            pos = self.env_origins[active_ids].clone()
-
-            # Reset front table
-            self.front_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.front_table_offset[0]
-            self.front_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.front_table_offset[1]
-            self.front_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.front_table_offset[2]
-            self.front_table_root_states[active_ids, 7:13] = 0
-
-            # Reset back table
-            self.back_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.back_table_offset[0]
-            self.back_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.back_table_offset[1]
-            self.back_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.back_table_offset[2]
-            self.back_table_root_states[active_ids, 7:13] = 0
-
-            # Reset box transfer
-            self.box_transfer_root_states[active_ids, 0] = self.front_table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_x).to(self.device)
-            self.box_transfer_root_states[active_ids, 1] = self.front_table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_y).to(self.device)
-            self.box_transfer_root_states[active_ids, 2] = self.front_table_root_states[active_ids, 2] + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * self.cfg.asset.box_transfer_size
-            self.box_transfer_root_states[active_ids, 3] = 1
-            self.box_transfer_root_states[active_ids, 4:] = 0
-
-            # Reset goal
-            self.box_transfer_goal_pos[active_ids, 0] = self.back_table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_x).to(self.device)
-            self.box_transfer_goal_pos[active_ids, 1] = self.back_table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.box_transfer_range_y).to(self.device)
-            self.box_transfer_goal_pos[active_ids, 2] = self.box_transfer_root_states[active_ids, 2]
+        if len(active_ids) == 0:
+            return
         
-        if len(inactive_ids) > 0:
-            self.front_table_root_states[inactive_ids, 2] = self.hidden_z
-            self.front_table_root_states[inactive_ids, 7:13] = 0
+        pos = self.env_origins[active_ids].clone()
 
-            self.back_table_root_states[inactive_ids, 2] = self.hidden_z
-            self.back_table_root_states[inactive_ids, 7:13] = 0
+        self.front_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.front_table_offset[0]
+        self.front_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.front_table_offset[1]
+        self.front_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.front_table_offset[2]
+        self.front_table_root_states[active_ids, 7:13] = 0
 
-            self.box_transfer_root_states[inactive_ids, 2] = self.hidden_z
-            self.box_transfer_root_states[inactive_ids, 7:13] = 0
+    def _reset_back_table_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+        
+        pos = self.env_origins[active_ids].clone()
+
+        self.back_table_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.back_table_offset[0]
+        self.back_table_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.back_table_offset[1]
+        self.back_table_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.back_table_offset[2]
+        self.back_table_root_states[active_ids, 7:13] = 0
+
+    def _reset_small_box_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BOX) | (self.task_ids[env_ids] == self.cfg.task.TASK_TRANSFER)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+
+        self.small_box_root_states[active_ids, 0] = self.front_table_root_states[active_ids, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.small_box_range_x).to(self.device)
+        self.small_box_root_states[active_ids, 1] = self.front_table_root_states[active_ids, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.small_box_range_y).to(self.device)
+        self.small_box_root_states[active_ids, 2] = self.front_table_root_states[active_ids, 2] + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * self.cfg.asset.small_box_size
+        self.small_box_root_states[active_ids, 3] = 1
+        self.small_box_root_states[active_ids, 4:] = 0
+
+    def _reset_big_box_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_CARRY) | (self.task_ids[env_ids] == self.cfg.task.TASK_LIFT)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+
+        pos = self.env_origins[active_ids].clone()
+
+        self.big_box_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.big_box_offset_xy[0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.big_box_range_x).to(self.device)
+        self.big_box_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.big_box_offset_xy[1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.big_box_range_y).to(self.device)
+        self.big_box_root_states[active_ids, 2] = 0.5 * self.cfg.asset.big_box_size[2]
+        self.big_box_root_states[active_ids, 3] = 1
+        self.big_box_root_states[active_ids, 4:] = 0
+
+    def _reset_wall_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BUTTON)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+        
+        pos = self.env_origins[active_ids].clone()
+
+        self.wall_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offset[0]
+        self.wall_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offset[1]
+        self.wall_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.wall_offset[2]
+        self.wall_root_states[active_ids, 7:13] = 0
+
+    def _reset_cabinet_states(self, env_ids):
+        active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_CABINET)
+        active_ids = env_ids[active_mask]
+
+        if len(active_ids) == 0:
+            return
+        
+        pos = self.env_origins[active_ids].clone()
+
+        self.cabinet_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.arti_obj_offset[0]
+        self.cabinet_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.arti_obj_offset[1]
+        self.cabinet_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.arti_obj_offset[2]
+        self.cabinet_root_states[active_ids, 7:13] = 0.0
 
     def step(self, actions):
         if self.cfg.env.use_ref_actions:
@@ -1043,8 +976,8 @@ class H1UnifiedTask(LeggedRobot):
         self.render()
         for _ in range(self.cfg.control.decimation):
             self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
-            arti_obj_force_buffer = torch.zeros((self.num_envs, self.arti_obj_num_dofs), device=self.device)
-            full_force_buffer = torch.cat((self.torques, arti_obj_force_buffer), dim=1) # [num_envs, num_dofs + arti_obj_num_dofs]
+            arti_obj_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
+            full_force_buffer = torch.cat((self.torques, arti_obj_force_buffer), dim=1) # [num_envs, num_dofs + cabinet_num_dofs]
             humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
             self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
                                                             gymtorch.unwrap_tensor(full_force_buffer),
@@ -1179,7 +1112,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_box_mask):
             wrist_pos = self.rigid_state[task_box_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[task_box_mask, :3]
+            box_pos = self.small_box_root_states[task_box_mask, :3]
             diff = box_pos - self.box_goal_pos[task_box_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
@@ -1224,7 +1157,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_cabinet_mask):
             wrist_pos = self.rigid_state[task_cabinet_mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
             # torso_pos = self.rigid_state[task_cabinet_mask, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
-            arti_obj_pos = self.arti_obj_root_states[task_cabinet_mask, :3] # [num_envs, 3]
+            arti_obj_pos = self.cabinet_root_states[task_cabinet_mask, :3] # [num_envs, 3]
             arti_obj_dof_pos = self.arti_obj_dof_state[task_cabinet_mask][:, :, 0] # [num_envs, 2]
             arti_obj_dof_goal = self.arti_obj_dof_goal # 0
             arti_obj_dof_diff_obs = arti_obj_dof_pos - arti_obj_dof_goal # [num_envs, 2]
@@ -1245,7 +1178,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_carry_mask):
             wrist_pos = self.rigid_state[task_carry_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_carry_root_states[task_carry_mask, :3]
+            box_pos = self.big_box_root_states[task_carry_mask, :3]
             diff = box_pos - self.box_carry_goal_pos[task_carry_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
@@ -1273,7 +1206,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_lift_mask):
             wrist_pos = self.rigid_state[task_lift_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_lift_root_states[task_lift_mask, :3]
+            box_pos = self.big_box_root_states[task_lift_mask, :3]
             diff = box_pos - self.box_lift_goal_pos[task_lift_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
@@ -1321,7 +1254,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_transfer_mask):
             wrist_pos = self.rigid_state[task_transfer_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_transfer_root_states[task_transfer_mask, :3]
+            box_pos = self.small_box_root_states[task_transfer_mask, :3]
             diff = box_pos - self.box_transfer_goal_pos[task_transfer_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
@@ -1369,20 +1302,19 @@ class H1UnifiedTask(LeggedRobot):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
-        self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
+        self.time_out_buf = self.episode_length_buf > self.max_episode_length
         self.reset_buf |= self.time_out_buf
-        
-        # if the ball hits the goal, reset the env
+
+        is_ball_task = (self.task_ids == self.cfg.task.TASK_BALL)
         ball_pos = self.ball_root_states[:, :3]
-        goal_pos = self.goal_pos
-        ball_goal_diff = ball_pos - goal_pos # [envs, 3]
-        ball_goal_dist = torch.norm(ball_goal_diff, dim=1)
-        self.reset_buf |= ball_goal_dist < self.cfg.commands.ranges.threshold
+        ball_goal_dist = torch.norm(ball_pos - self.goal_pos, dim=1)
+
+        self.reset_buf |= (is_ball_task & (ball_goal_dist < self.cfg.commands.ranges.threshold))
+
 
     def reset_idx(self, env_ids):
+        self.task_ids[env_ids] = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
         super().reset_idx(env_ids)
-        new_tasks = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
-        self.task_ids[env_ids] = new_tasks
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
         for i in range(self.critic_history.maxlen):
@@ -1448,7 +1380,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_BOX)
 
         if torch.any(mask):
-            box_pos_diff = self.box_root_states[mask, :3] - self.box_goal_pos[mask]
+            box_pos_diff = self.small_box_root_states[mask, :3] - self.box_goal_pos[mask]
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * box_pos_error)
@@ -1465,7 +1397,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[mask, :3] # [num_envs, 3]
+            box_pos = self.small_box_root_states[mask, :3] # [num_envs, 3]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3]
             wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
             wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
@@ -1558,7 +1490,7 @@ class H1UnifiedTask(LeggedRobot):
     
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
-            arti_obj_pos = self.arti_obj_root_states[mask, :3] # [num_envs, 3]
+            arti_obj_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
             wrist_arti_obj_diff = wrist_pos - arti_obj_pos.unsqueeze(1) # [num_envs, 2, 3]
             wrist_arti_obj_diff = torch.flatten(wrist_arti_obj_diff, start_dim=1) # [num_envs, 6]
             wrist_arti_obj_error = torch.mean(torch.abs(wrist_arti_obj_diff), dim=1)
@@ -1611,7 +1543,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_CARRY)
     
         if torch.any(mask):
-            box_pos_diff = self.box_carry_root_states[mask, :3] - self.box_carry_goal_pos[mask]
+            box_pos_diff = self.small_box_root_states[mask, :3] - self.box_carry_goal_pos[mask]
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * box_pos_error)
@@ -1628,7 +1560,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_carry_root_states[mask, :3] # [num_envs, 3]
+            box_pos = self.big_box_root_states[mask, :3] # [num_envs, 3]
             box_handle_left = box_pos.clone()
             box_handle_right = box_pos.clone()
             # box_handle_left[:, 1] += 0.4 * self.cfg.asset.box_size[1]
@@ -1670,7 +1602,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_LIFT)
     
         if torch.any(mask):
-            box_pos_diff = self.box_lift_root_states[mask, :3] - self.box_lift_goal_pos[mask]
+            box_pos_diff = self.big_box_root_states[mask, :3] - self.box_lift_goal_pos[mask]
             box_pos_diff = box_pos_diff[:, 2:3] # only z axis
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
@@ -1688,7 +1620,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_lift_root_states[mask, :3] # [num_envs, 3]
+            box_pos = self.big_box_root_states[mask, :3] # [num_envs, 3]
             box_handle_left = box_pos.clone()
             box_handle_right = box_pos.clone()
             # box_handle_left[:, 1] += 0.4 * self.cfg.asset.box_size[1]
@@ -1748,7 +1680,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_TRANSFER)
     
         if torch.any(mask):
-            box_pos_diff = self.box_transfer_root_states[mask][:, :3] - self.box_transfer_goal_pos[mask]
+            box_pos_diff = self.small_box_root_states[mask][:, :3] - self.box_transfer_goal_pos[mask]
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * box_pos_error)
@@ -1765,7 +1697,7 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[mask, :3] # [num_envs, 3]
+            box_pos = self.small_box_root_states[mask, :3] # [num_envs, 3]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3]
             wrist_pos_diff = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
             wrist_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
