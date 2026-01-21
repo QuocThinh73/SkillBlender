@@ -1520,7 +1520,7 @@ class H1UnifiedTask(LeggedRobot):
 
         if torch.any(mask):
             torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
-            arti_obj_pos = self.arti_obj_root_states[mask, :3] # [num_envs, 3]
+            arti_obj_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
             torso_arti_obj_diff = arti_obj_pos - torso_pos # [num_envs, 3]
             torso_arti_obj_distance = torch.norm(torso_arti_obj_diff, dim=1) # [num_envs]
             torso_arti_obj_distance[torso_arti_obj_distance < 0.1] = 0 # ignore small distance

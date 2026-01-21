@@ -342,7 +342,7 @@ class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
 
         # logging
         save_interval = 1000  # check for potential saves every this many iterations
-        experiment_name = 'h1_task_box'
+        experiment_name = 'h1_unified_task'
         run_name = ''
         # load and resume
         resume = False
