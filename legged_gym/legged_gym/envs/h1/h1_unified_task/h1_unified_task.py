@@ -874,8 +874,11 @@ class H1UnifiedTask(LeggedRobot):
         inactive_ids = env_ids[~task_cabinet_envs]
 
         if len(active_ids) > 0:
+            pos = self.env_origins[active_ids]
             active_indices = self.arti_obj_idxs[active_ids]
-            self.root_states[active_indices, 2] = self.cfg.asset.arti_obj_offset[2]
+            self.root_states[active_indices, 0] = pos[:, 0] + self.cfg.asset.arti_obj_offset[0]
+            self.root_states[active_indices, 1] = pos[:, 1] + self.cfg.asset.arti_obj_offset[1]
+            self.root_states[active_indices, 2] = pos[:, 2] + self.cfg.asset.arti_obj_offset[2]
             self.root_states[active_indices, 7:13] = 0
 
         if len(inactive_ids) > 0:
@@ -1038,7 +1041,7 @@ class H1UnifiedTask(LeggedRobot):
         self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
-        # self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
+        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_last_actions[:] = torch.clone(self.last_actions[:])
         self.last_actions[:] = self.actions[:]
@@ -1094,7 +1097,7 @@ class H1UnifiedTask(LeggedRobot):
             task_one_hot, # 8
         ), dim=-1)
 
-        task_specific_obs_buf = torch.zeros(self.num_envs, self.cfg.env.max_command_dim, device=self.device)
+        task_specific_obs_buf = torch.zeros(self.num_envs, self.cfg.env.command_dim, device=self.device)
         task_specific_privileged_obs_buf = torch.zeros(self.num_envs, self.cfg.env.max_privileged_obs_dim, device=self.device)
 
         # Task ball observations
@@ -1194,13 +1197,13 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_carry_mask):
             wrist_pos = self.rigid_state[task_carry_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[task_carry_mask, :3]
-            diff = box_pos - self.box_goal_pos[task_carry_mask]
+            box_pos = self.box_carry_root_states[task_carry_mask, :3]
+            diff = box_pos - self.box_carry_goal_pos[task_carry_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
             wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
             wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
-            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_carry_mask], start_dim=1) # [num_envs, 3]
+            box_goal_pos_obs = torch.flatten(self.box_carry_goal_pos[task_carry_mask], start_dim=1) # [num_envs, 3]
             box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
             diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
 
@@ -1222,13 +1225,13 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_lift_mask):
             wrist_pos = self.rigid_state[task_lift_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[task_lift_mask, :3]
-            diff = box_pos - self.box_goal_pos[task_lift_mask]
+            box_pos = self.box_lift_root_states[task_lift_mask, :3]
+            diff = box_pos - self.box_lift_goal_pos[task_lift_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
             wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
             wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
-            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_lift_mask], start_dim=1) # [num_envs, 3]
+            box_goal_pos_obs = torch.flatten(self.box_lift_goal_pos[task_lift_mask], start_dim=1) # [num_envs, 3]
             box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
             diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
 
@@ -1270,13 +1273,13 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_transfer_mask):
             wrist_pos = self.rigid_state[task_transfer_mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
             wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            box_pos = self.box_root_states[task_transfer_mask, :3]
-            diff = box_pos - self.box_goal_pos[task_transfer_mask]
+            box_pos = self.box_transfer_root_states[task_transfer_mask, :3]
+            diff = box_pos - self.box_transfer_goal_pos[task_transfer_mask]
             wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) # [num_envs, 2, 3], two hands, position only
             
             wrist_pos_obs = torch.flatten(wrist_pos, start_dim=1) # [num_envs, 6]
             wrist_box_diff_obs = torch.flatten(wrist_box_diff, start_dim=1) # [num_envs, 6]
-            box_goal_pos_obs = torch.flatten(self.box_goal_pos[task_transfer_mask], start_dim=1) # [num_envs, 3]
+            box_goal_pos_obs = torch.flatten(self.box_transfer_goal_pos[task_transfer_mask], start_dim=1) # [num_envs, 3]
             box_pos_obs = torch.flatten(box_pos, start_dim=1) # [num_envs, 3]
             diff_obs = torch.flatten(diff, start_dim=1) # [num_envs, 3]
 
@@ -1560,7 +1563,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_CARRY)
     
         if torch.any(mask):
-            box_pos_diff = self.box_root_states[mask, :3] - self.box_goal_pos[mask]
+            box_pos_diff = self.box_carry_root_states[mask, :3] - self.box_carry_goal_pos[mask]
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * box_pos_error)
@@ -1619,7 +1622,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_LIFT)
     
         if torch.any(mask):
-            box_pos_diff = self.box_lift_root_states[mask, :3] - self.box_goal_pos[mask]
+            box_pos_diff = self.box_lift_root_states[mask, :3] - self.box_lift_goal_pos[mask]
             box_pos_diff = box_pos_diff[:, 2:3] # only z axis
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
@@ -1697,7 +1700,7 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_TRANSFER)
     
         if torch.any(mask):
-            box_pos_diff = self.box_root_states[mask][:, :3] - self.box_goal_pos[mask]
+            box_pos_diff = self.box_transfer_root_states[mask][:, :3] - self.box_transfer_goal_pos[mask]
             box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * box_pos_error)

@@ -23,14 +23,13 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         frame_stack = 1
         c_frame_stack = 3
         command_dim = 14
-        max_command_dim = 14
-        num_single_obs = 3 * num_actions + 14 + max_command_dim # see `obs_buf = torch.cat(...)` for details
+        num_single_obs = 3 * num_actions + 14 + command_dim # q(19) + dq(19) + actions(19) + base_ang_vel(3) + base_euler_xyz(3) + task_one_hot(8) + task_specific(14)
         num_observations = int(frame_stack * num_single_obs)
         max_privileged_obs_dim = 42
         single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 1024
+        num_envs = 16
         episode_length_s = 24  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
@@ -38,7 +37,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
     class asset(LeggedRobotCfg.asset):
         file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/h1/urdf/h1_wrist.urdf'
 
-        hidden_z = -10.0
+        hidden_z = 10.0
 
         name = "h1"
         foot_name = "ankle"
