@@ -12,7 +12,6 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.terrain import XBotTerrain
 from collections import deque
 from legged_gym.utils.human import sample_int_from_float, sample_rp
-from copy import deepcopy
 
 
 class H1UnifiedTask(LeggedRobot):
@@ -186,6 +185,284 @@ class H1UnifiedTask(LeggedRobot):
                 "Terrain mesh type not recognised. Allowed types are [None, plane, heightfield, trimesh]")
         self._create_envs()
         
+    def _create_door_assets(self):
+        door_assets = []
+        door_pose = gymapi.Transform()
+
+        for dim in self.cfg.asset.door_dims:
+            door_dims = gymapi.Vec3(*dim)
+
+            asset_options = gymapi.AssetOptions()
+            asset_options.fix_base_link = True
+            asset_options.disable_gravity = True
+
+            door_asset = self.gym.create_box(
+                self.sim,
+                door_dims.x, door_dims.y, door_dims.z,
+                asset_options
+            )
+            door_assets.append(door_asset)
+
+        return door_assets, door_pose
+    
+    def _create_ball_asset(self):
+        ball_size = self.cfg.asset.ball_size
+
+        asset_options = gymapi.AssetOptions()
+        ball_asset = self.gym.create_sphere(self.sim, ball_size, asset_options)
+
+        ball_pose = gymapi.Transform()
+
+        return ball_asset, ball_pose, ball_size
+    
+    def _create_front_table_asset(self):
+        front_table_dims = gymapi.Vec3(*self.cfg.asset.front_table_dims)
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+
+        front_table_asset = self.gym.create_box(
+            self.sim, front_table_dims.x, front_table_dims.y, front_table_dims.z, asset_options
+        )
+
+        front_table_pose = gymapi.Transform()
+
+        return front_table_asset, front_table_pose, front_table_dims
+    
+    def _create_back_table_asset(self):
+        back_table_dims = gymapi.Vec3(*self.cfg.asset.back_table_dims)
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+
+        back_table_asset = self.gym.create_box(
+            self.sim, back_table_dims.x, back_table_dims.y, back_table_dims.z, asset_options
+        )
+
+        back_table_pose = gymapi.Transform()
+
+        return back_table_asset, back_table_pose, back_table_dims
+    
+    def _create_small_box_asset(self):
+        small_box_size = self.cfg.asset.small_box_size
+
+        asset_options = gymapi.AssetOptions()
+        small_box_asset = self.gym.create_box(self.sim, small_box_size, small_box_size, small_box_size, asset_options)
+
+        small_box_pose = gymapi.Transform()
+
+        return small_box_asset, small_box_pose, small_box_size
+    
+    def _create_big_box_asset(self):
+        big_box_size = gymapi.Vec3(*self.cfg.asset.big_box_size)
+
+        asset_options = gymapi.AssetOptions()
+        big_box_asset = self.gym.create_box(self.sim, big_box_size.x, big_box_size.y, big_box_size.z, asset_options)
+
+        big_box_pose = gymapi.Transform()
+
+        return big_box_asset, big_box_pose, big_box_size
+    
+    def _create_wall_asset(self):
+        wall_dims = gymapi.Vec3(*self.cfg.asset.wall_dims)
+
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+
+        wall_asset = self.gym.create_box(
+            self.sim, wall_dims.x, wall_dims.y, wall_dims.z, asset_options
+        )
+
+        wall_pose = gymapi.Transform()
+
+        return wall_asset, wall_pose, wall_dims
+    
+    def _create_cabinet_asset(self):
+        asset_options = gymapi.AssetOptions()
+        asset_options.use_mesh_materials = True
+        asset_options.mesh_normal_mode = gymapi.COMPUTE_PER_VERTEX
+        asset_options.override_inertia = True
+        asset_options.override_com = True
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+
+        cabinet_asset = self.gym.load_asset(self.sim, self.cfg.asset.gapartnet_root, f"{self.cfg.asset.gapartnet_id}/mobility_annotation_gapartnet.urdf", asset_options)
+
+        cabinet_pose = gymapi.Transform()
+
+        # DOFs
+        num_dofs = self.gym.get_asset_dof_count(cabinet_asset)
+        dof_props = self.gym.get_asset_dof_properties(cabinet_asset)
+
+        # Default DOF
+        default_dof_pos = np.zeros(num_dofs, dtype=np.float32)
+        default_dof_pos[:] = self.cfg.asset.arti_obj_dof_default
+        default_dof_state = np.zeros(num_dofs, gymapi.DofState.dtype)
+        default_dof_state["pos"] = default_dof_pos
+
+        # Configure DOF properties
+        dof_props["driveMode"].fill(gymapi.DOF_MODE_NONE) # NO DOF_MODE_POS
+        dof_props["stiffness"].fill(0.0) # how fast the arti obj gonna move
+        dof_props["damping"].fill(5.0) # large damping to prevent oscillation
+        dof_props["friction"].fill(0.0)
+
+        return cabinet_asset, cabinet_pose, num_dofs, dof_props, default_dof_state
+
+    def _spawn_actor(self, env_handle, asset, pose, name, collision_group, collision_filter, segmentation_id=0):
+        h = self.gym.create_actor(env_handle, asset, pose, name, collision_group, collision_filter, segmentation_id)
+        idx = self.gym.get_actor_index(env_handle, h, gymapi.DOMAIN_SIM)
+        return h, idx
+
+    def _spawn_robot(self, env_handle, env_id, base_pos, robot_asset, start_pose, dof_props_asset, rigid_shape_props_asset):
+        start_pose.p = gymapi.Vec3(
+            base_pos[0].item(),
+            base_pos[1].item(),
+            base_pos[2].item(),
+        )
+        
+        rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, env_id)
+        self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
+
+        robot_handle, robot_idx = self._spawn_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, env_id, self.cfg.asset.self_collisions, 0)
+
+        dof_props = self._process_dof_props(dof_props_asset, env_id)
+        self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
+
+        body_props = self.gym.get_actor_rigid_body_properties(env_handle, robot_handle)
+        body_props = self._process_rigid_body_props(body_props, env_id)
+        self.gym.set_actor_rigid_body_properties(env_handle, robot_handle, body_props, recomputeInertia=True)
+
+        return robot_handle, robot_idx
+    
+    def _spawn_doors(self, env_handle, env_id, base_pos, door_assets, door_pose):
+        env_door_idxs = []
+        for door_i, door_asset in enumerate(door_assets):
+            offset = self.cfg.asset.door_offsets[door_i]
+            door_pose.p = gymapi.Vec3(
+                base_pos[0].item() + offset[0],
+                base_pos[1].item() + offset[1],
+                base_pos[2].item() + offset[2],
+            )
+
+            _, idx = self._spawn_actor(env_handle, door_asset, door_pose, f"door_{door_i}", env_id, 0)
+            env_door_idxs.append(idx)
+
+        return env_door_idxs
+    
+    def _spawn_ball(self, env_handle, env_id, base_pos, ball_asset, ball_pose, ball_size):
+            ball_pose.p.x = base_pos[0].item() + np.random.uniform(*self.cfg.asset.ball_range_x)
+            ball_pose.p.y = base_pos[1].item() + np.random.uniform(*self.cfg.asset.ball_range_y)
+            ball_pose.p.z = base_pos[2].item() + 0.5 * ball_size
+            ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
+
+            ball_handle, ball_idx = self._spawn_actor(env_handle, ball_asset, ball_pose, "ball", env_id, 0)
+
+            ball_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, ball_handle)
+
+            for prop in ball_rigid_body_props:
+                prop.mass = random.uniform(*self.cfg.asset.ball_range_mass)
+            self.gym.set_actor_rigid_body_properties(env_handle, ball_handle, ball_rigid_body_props, recomputeInertia=True)
+
+            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+
+            self.gym.set_rigid_body_color(env_handle, ball_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
+            
+            return ball_idx
+
+    def _spawn_front_table(self, env_handle, env_id, base_pos, front_table_asset, front_table_pose):
+        offset = self.cfg.asset.front_table_offset
+        front_table_pose.p = gymapi.Vec3(
+            base_pos[0].item() + offset[0],
+            base_pos[1].item() + offset[1],
+            base_pos[2].item() + offset[2],
+        )
+
+        _, idx = self._spawn_actor(env_handle, front_table_asset, front_table_pose, "front_table", env_id, 0)
+
+        return idx, front_table_pose
+
+    def _spawn_back_table(self, env_handle, env_id, base_pos, back_table_asset, back_table_pose):
+        offset = self.cfg.asset.back_table_offset
+        back_table_pose.p = gymapi.Vec3(
+            base_pos[0].item() + offset[0],
+            base_pos[1].item() + offset[1],
+            base_pos[2].item() + offset[2],
+        )
+
+        _, idx = self._spawn_actor(env_handle, back_table_asset, back_table_pose, "back_table", env_id, 0)
+
+        return idx, back_table_pose
+
+    def _spawn_small_box_on_front_table(self, env_handle, env_id, front_table_pose, small_box_asset, small_box_pose, small_box_size):
+        small_box_pose.p.x = front_table_pose.p.x + np.random.uniform(*self.cfg.asset.small_box_range_x)
+        small_box_pose.p.y = front_table_pose.p.y + np.random.uniform(*self.cfg.asset.small_box_range_y)
+        small_box_pose.p.z = front_table_pose.p.z + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * small_box_size
+        small_box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
+
+        box_handle, box_idx = self._spawn_actor(env_handle, small_box_asset, small_box_pose, "small_box", env_id, 0)
+
+        color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+
+        self.gym.set_rigid_body_color(env_handle, box_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
+
+        return box_idx, box_handle
+
+    def _spawn_big_box(self, env_handle, env_id, base_pos, big_box_asset, big_box_pose, big_box_size):
+        offset_xy = self.cfg.asset.big_box_offset_xy
+        big_box_pose.p = gymapi.Vec3(
+            base_pos[0].item() + offset_xy[0] + np.random.uniform(*self.cfg.asset.big_box_range_x),
+            base_pos[1].item() + offset_xy[1] + np.random.uniform(*self.cfg.asset.big_box_range_y),
+            base_pos[2].item() + 0.5 * big_box_size.z,
+        )
+        
+        h, idx = self._spawn_actor(env_handle, big_box_asset, big_box_pose, "big_box", env_id, 0)
+
+        big_box_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, h)
+        for prop in big_box_rigid_body_props:
+            prop.mass = random.uniform(*self.cfg.asset.big_box_range_mass)
+        self.gym.set_actor_rigid_body_properties(env_handle, h, big_box_rigid_body_props, recomputeInertia=True)
+
+        big_box_rigid_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, h)
+        for prop in big_box_rigid_shape_props:
+            prop.friction = 5.
+        self.gym.set_actor_rigid_shape_properties(env_handle, h, big_box_rigid_shape_props)
+        
+        color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+        self.gym.set_rigid_body_color(env_handle, h, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
+        
+        return idx
+
+    def _spawn_wall(self, env_handle, env_id, base_pos, wall_asset, wall_pose):
+        offset = self.cfg.asset.wall_offset
+        wall_pose.p = gymapi.Vec3(
+            base_pos[0].item() + offset[0],
+            base_pos[1].item() + offset[1],
+            base_pos[2].item() + offset[2],
+        )
+
+        _, idx = self._spawn_actor(env_handle, wall_asset, wall_pose, "wall", env_id, 0)
+
+        return idx
+
+    def _spawn_cabinet(self, env_handle, env_id, base_pos, cabinet_asset, cabinet_pose, cabinet_dof_props, cabinet_default_dof_state):
+        offset = self.cfg.asset.arti_obj_offset
+        cabinet_pose.p = gymapi.Vec3(
+            base_pos[0].item() + offset[0],
+            base_pos[1].item() + offset[1],
+            base_pos[2].item() + offset[2],
+        )
+
+        cabinet_handle, cabinet_idx = self._spawn_actor(env_handle, cabinet_asset, cabinet_pose, "cabinet", env_id, 0)
+
+        self.gym.set_actor_dof_properties(env_handle, cabinet_handle, cabinet_dof_props)
+        self.gym.set_actor_dof_states(env_handle, cabinet_handle, cabinet_default_dof_state, gymapi.STATE_ALL)
+        self.gym.set_actor_scale(env_handle, cabinet_handle, self.cfg.asset.arti_obj_scale)
+
+        return cabinet_idx, cabinet_handle
+
     def _create_envs(self):
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
         asset_root = os.path.dirname(asset_path)
@@ -238,286 +515,74 @@ class H1UnifiedTask(LeggedRobot):
         self.actor_handles = []
         self.envs = []
         self.env_frictions = torch.zeros(self.num_envs, 1, dtype=torch.float32, device=self.device)
-
         self.body_mass = torch.zeros(self.num_envs, 1, dtype=torch.float32, device=self.device, requires_grad=False)
         
         # Create assets
-        ## Task ball
-        ### Door asset
-        door_assets = []
-        door_pose = gymapi.Transform()
-        for dim in self.cfg.asset.door_dims:
-            door_dims = gymapi.Vec3(*dim)
-            asset_options = gymapi.AssetOptions()
-            asset_options.fix_base_link = True
-            asset_options.disable_gravity = True
-            door_asset = self.gym.create_box(self.sim, door_dims.x, door_dims.y, door_dims.z, asset_options)
-            door_assets.append(door_asset)
+        door_assets, door_pose = self._create_door_assets()
         self.door_idxs = []
-        
-        ### Ball asset
-        ball_size = self.cfg.asset.ball_size
-        asset_options = gymapi.AssetOptions()
-        ball_asset = self.gym.create_sphere(self.sim, ball_size, asset_options)
-        ball_pose = gymapi.Transform()
+        ball_asset, ball_pose, ball_size = self._create_ball_asset()
         self.ball_idxs = []
-        
-        ## Task box
-        ### Table asset
-        table_dims = gymapi.Vec3(*self.cfg.asset.table_dims)
-        asset_options = gymapi.AssetOptions()
-        asset_options.fix_base_link = True
-        asset_options.disable_gravity = True
-        table_asset = self.gym.create_box(self.sim, table_dims.x, table_dims.y, table_dims.z, asset_options)
-        table_pose = gymapi.Transform()
-        self.table_idxs = []
-
-        ### Box asset
-        box_size = self.cfg.asset.box_size
-        asset_options = gymapi.AssetOptions()
-        box_asset = self.gym.create_box(self.sim, box_size, box_size, box_size, asset_options)
-        box_pose = gymapi.Transform()
-        self.box_idxs = []
-            
-        ## Task Button
-        ### Wall asset
-        wall_dims = gymapi.Vec3(*self.cfg.asset.wall_dims)
-        asset_options = gymapi.AssetOptions()
-        asset_options.fix_base_link = True
-        asset_options.disable_gravity = True
-        wall_asset = self.gym.create_box(self.sim, wall_dims.x, wall_dims.y, wall_dims.z, asset_options)
-        wall_pose = gymapi.Transform()
-        self.wall_idxs = []
-
-        ## Task Cabinet
-        ### Cabinet asset
-        arti_obj_asset_options = gymapi.AssetOptions()
-        arti_obj_asset_options.use_mesh_materials = True
-        arti_obj_asset_options.mesh_normal_mode = gymapi.COMPUTE_PER_VERTEX
-        arti_obj_asset_options.override_inertia = True
-        arti_obj_asset_options.override_com = True
-        arti_obj_asset_options.fix_base_link = True
-        arti_obj_asset_options.disable_gravity = True
-        arti_obj_asset = self.gym.load_asset(self.sim, self.cfg.asset.gapartnet_root, f"{self.cfg.asset.gapartnet_id}/mobility_annotation_gapartnet.urdf", arti_obj_asset_options)
-        self.arti_obj_num_dofs = self.gym.get_asset_dof_count(arti_obj_asset)
-        print("=====> arti_obj_num_dofs:", self.arti_obj_num_dofs)
-
-        ### Configure object dofs
-        arti_obj_dof_props = self.gym.get_asset_dof_properties(arti_obj_asset)
-        arti_obj_default_dof_pos = np.zeros(self.arti_obj_num_dofs, dtype=np.float32)
-        arti_obj_default_dof_pos[:] = self.cfg.asset.arti_obj_dof_default
-        arti_obj_default_dof_state = np.zeros(self.arti_obj_num_dofs, gymapi.DofState.dtype)
-        arti_obj_default_dof_state["pos"] = arti_obj_default_dof_pos
-        arti_obj_dof_props["driveMode"].fill(gymapi.DOF_MODE_NONE) # NO DOF_MODE_POS
-        arti_obj_dof_props["stiffness"].fill(0) # how fast the arti obj gonna move
-        arti_obj_dof_props["damping"].fill(5) # large damping to prevent oscillation
-        arti_obj_dof_props["friction"].fill(0)
-        arti_obj_pose = gymapi.Transform()
-        self.arti_obj_idxs = []
-
-        ## Task Carry
-        ### Box carry asset
-        box_carry_size = self.cfg.asset.box_carry_size
-        asset_options = gymapi.AssetOptions()
-        box_carry_asset = self.gym.create_box(self.sim, box_carry_size[0], box_carry_size[1], box_carry_size[2], asset_options)
-        box_carry_pose = gymapi.Transform()
-        self.box_carry_idxs = []
-
-        ## Task Lift
-        ### Box lift asset
-        box_lift_size = self.cfg.asset.box_lift_size
-        asset_options = gymapi.AssetOptions()
-        # asset_options.density = self.cfg.asset.density * 0.5 # no need to do this, will change mass below
-        # add rigid shape properties if needed (e.g. friction)
-        box_lift_asset = self.gym.create_box(self.sim, box_lift_size[0], box_lift_size[1], box_lift_size[2], asset_options)
-        box_lift_pose = gymapi.Transform()
-        self.box_lift_idxs = []
-        
-        ## Task Transfer
-        ### Front table asset
-        front_table_dims = gymapi.Vec3(*self.cfg.asset.front_table_dims)
-        asset_options = gymapi.AssetOptions()
-        asset_options.fix_base_link = True
-        asset_options.disable_gravity = True
-        front_table_asset = self.gym.create_box(self.sim, front_table_dims.x, front_table_dims.y, front_table_dims.z, asset_options)
-        front_table_pose = gymapi.Transform()
+        front_table_asset, front_table_pose, front_table_dims = self._create_front_table_asset()
         self.front_table_idxs = []
-        ### Back table asset
-        back_table_dims = gymapi.Vec3(*self.cfg.asset.back_table_dims)
-        back_table_asset = self.gym.create_box(self.sim, back_table_dims.x, back_table_dims.y, back_table_dims.z, asset_options)
-        back_table_pose = gymapi.Transform()
+        back_table_asset, back_table_pose, back_table_dims = self._create_back_table_asset()
         self.back_table_idxs = []
-        ### Box transfer asset
-        box_transfer_size = self.cfg.asset.box_transfer_size
-        asset_options = gymapi.AssetOptions()
-        box_transfer_asset = self.gym.create_box(self.sim, box_transfer_size, box_transfer_size, box_transfer_size, asset_options)
-        box_transfer_pose = gymapi.Transform()
-        self.box_transfer_idxs = []
-        
-        # Create actors
+        small_box_asset, small_box_pose, small_box_size = self._create_small_box_asset()
+        self.small_box_idxs = []
+        big_box_asset, big_box_pose, big_box_size = self._create_big_box_asset()
+        self.big_box_idxs = []  
+        wall_asset, wall_pose, wall_dims = self._create_wall_asset()
+        self.wall_idxs = []
+        cabinet_asset, cabinet_pose, cabinet_num_dofs, cabinet_dof_props, cabinet_default_dof_state = self._create_cabinet_asset()
+        self.cabinet_num_dofs = cabinet_num_dofs
+        self.cabinet_idxs = []
         self.humanoid_idxs = []
+
+        # Create actors
         for i in range(self.num_envs):
             ## Create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
-            pos = self.env_origins[i].clone()
-            start_pose.p = gymapi.Vec3(*pos)
-            
-            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
-            actor_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, i, self.cfg.asset.self_collisions, 0)
-            dof_props = self._process_dof_props(dof_props_asset, i)
-            self.gym.set_actor_dof_properties(env_handle, actor_handle, dof_props)
-            body_props = self.gym.get_actor_rigid_body_properties(env_handle, actor_handle)
-            body_props = self._process_rigid_body_props(body_props, i)
-            self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
-            self.actor_handles.append(actor_handle)
-            self.humanoid_idxs.append(self.gym.get_actor_index(env_handle, actor_handle, gymapi.DOMAIN_SIM))
 
-            ## Task ball
-            ### Add door
-            env_door_idxs = []
-            for door_i, door_asset in enumerate(door_assets):
-                door_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.door_offsets[door_i], device=self.device)))
-                door_handle = self.gym.create_actor(env_handle, door_asset, door_pose, f"door_{door_i}", i, 0)
-                env_door_idxs.append(self.gym.get_actor_index(env_handle, door_handle, gymapi.DOMAIN_SIM))
+            pos = self.env_origins[i].clone()
+
+            robot_handle, robot_idx = self._spawn_robot(env_handle, i, pos, robot_asset, start_pose, dof_props_asset, rigid_shape_props_asset)
+            self.actor_handles.append(robot_handle)
+            self.humanoid_idxs.append(robot_idx)
+
+            env_door_idxs = self._spawn_doors(env_handle, i, pos, door_assets, door_pose)
             self.door_idxs.append(env_door_idxs)
-            ### Add ball
-            ball_pose.p.x = pos[0].item() + np.random.uniform(*self.cfg.asset.ball_range_x)
-            ball_pose.p.y = pos[1].item() + np.random.uniform(*self.cfg.asset.ball_range_y)
-            ball_pose.p.z = pos[2].item() + 0.5 * ball_size
-            ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            ball_handle = self.gym.create_actor(env_handle, ball_asset, ball_pose, "ball", i, 0)
-            ### Change ball actor properties
-            ball_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, ball_handle)
-            for prop in ball_rigid_body_props:
-                prop.mass = random.uniform(*self.cfg.asset.ball_range_mass) # change mass here!
-            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_rigid_body_color(env_handle, ball_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
-            self.ball_idxs.append(self.gym.get_actor_index(env_handle, ball_handle, gymapi.DOMAIN_SIM))
 
-            ## Task box
-            ### Add table
-            table_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.table_offset, device=self.device)))
-            table_handle = self.gym.create_actor(env_handle, table_asset, table_pose, "table", i, 0)
-            self.table_idxs.append(self.gym.get_actor_index(env_handle, table_handle, gymapi.DOMAIN_SIM))
-            ### Add box
-            box_pose.p.x = table_pose.p.x + np.random.uniform(*self.cfg.asset.box_range_x)
-            box_pose.p.y = table_pose.p.y + np.random.uniform(*self.cfg.asset.box_range_y)
-            box_pose.p.z = table_pose.p.z + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * box_size
-            box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            box_handle = self.gym.create_actor(env_handle, box_asset, box_pose, "box", i, 0)
-            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_rigid_body_color(env_handle, box_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
-            self.box_idxs.append(self.gym.get_actor_index(env_handle, box_handle, gymapi.DOMAIN_SIM))
+            ball_idx = self._spawn_ball(env_handle, i, pos, ball_asset, ball_pose, ball_size)
+            self.ball_idxs.append(ball_idx)
 
-            ## Task button
-            ### Add wall
-            wall_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.wall_offset, device=self.device)))
-            wall_handle = self.gym.create_actor(env_handle, wall_asset, wall_pose, "wall", i, 0)
-            self.wall_idxs.append(self.gym.get_actor_index(env_handle, wall_handle, gymapi.DOMAIN_SIM))
-            
-            ## Task cabinet
-            ### Add cabinet
-            arti_obj_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.arti_obj_offset, device=self.device)))
-            arti_obj_handle = self.gym.create_actor(env_handle, arti_obj_asset, arti_obj_pose, "cabinet", i, 0)
-            self.gym.set_actor_dof_properties(env_handle, arti_obj_handle, arti_obj_dof_props)
-            self.gym.set_actor_dof_states(env_handle, arti_obj_handle, arti_obj_default_dof_state, gymapi.STATE_ALL)
-            # self.gym.set_actor_dof_position_targets(env_handle, arti_obj_handle, arti_obj_default_dof_pos) # not sure whether it's useful
-            self.gym.set_actor_scale(env_handle, arti_obj_handle, self.cfg.asset.arti_obj_scale)
-            self.arti_obj_idxs.append(self.gym.get_actor_index(env_handle, arti_obj_handle, gymapi.DOMAIN_SIM))
+            front_table_idx, current_front_table_pose = self._spawn_front_table(env_handle, i, pos, front_table_asset, front_table_pose)
+            self.front_table_idxs.append(front_table_idx)
 
-            ## Task Carry
-            ### Add box carry
-            box_carry_pose.p = gymapi.Vec3(*pos[:3])
-            box_carry_pose.p.x += self.cfg.asset.box_carry_offset_xy[0] + np.random.uniform(*self.cfg.asset.box_carry_range_x)
-            box_carry_pose.p.y += self.cfg.asset.box_carry_offset_xy[1] + np.random.uniform(*self.cfg.asset.box_carry_range_y)
-            box_carry_pose.p.z = 0.5 * box_carry_size[2]
-            # box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            box_carry_handle = self.gym.create_actor(env_handle, box_carry_asset, box_carry_pose, "box_carry", i, 0)
-            ### change box actor properties
-            box_carry_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_carry_handle)
-            for prop in box_carry_rigid_body_props:
-                prop.mass = random.uniform(*self.cfg.asset.box_carry_range_mass) # change mass here!
-            self.gym.set_actor_rigid_body_properties(env_handle, box_carry_handle, box_carry_rigid_body_props, recomputeInertia=True)
-            box_carry_rigid_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, box_carry_handle)
-            for prop in box_carry_rigid_shape_props:
-                prop.friction = 5. # change friction here!
-            self.gym.set_actor_rigid_shape_properties(env_handle, box_carry_handle, box_carry_rigid_shape_props)
-            ###
-            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_rigid_body_color(env_handle, box_carry_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
-            self.box_carry_idxs.append(self.gym.get_actor_index(env_handle, box_carry_handle, gymapi.DOMAIN_SIM))
+            back_table_idx, _ = self._spawn_back_table(env_handle, i, pos, back_table_asset, back_table_pose)
+            self.back_table_idxs.append(back_table_idx)
 
-            ## Task Lift
-            ### Add box lift
-            box_lift_pose.p = gymapi.Vec3(*pos[:3])
-            box_lift_pose.p.x += self.cfg.asset.box_lift_offset_xy[0] + np.random.uniform(*self.cfg.asset.box_lift_range_x)
-            box_lift_pose.p.y += self.cfg.asset.box_lift_offset_xy[1] + np.random.uniform(*self.cfg.asset.box_lift_range_y)
-            box_lift_pose.p.z = 0.5 * box_lift_size[2]
-            # box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            box_lift_handle = self.gym.create_actor(env_handle, box_lift_asset, box_lift_pose, "box_lift", i, 0)
-            ### change box actor properties
-            box_lift_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_lift_handle)
-            for prop in box_lift_rigid_body_props:
-                prop.mass = random.uniform(*self.cfg.asset.box_lift_range_mass) # change mass here!
-            self.gym.set_actor_rigid_body_properties(env_handle, box_lift_handle, box_lift_rigid_body_props, recomputeInertia=True)
-            box_lift_rigid_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, box_lift_handle)
-            for prop in box_lift_rigid_shape_props:
-                prop.friction = 5. # change friction here!
-            self.gym.set_actor_rigid_shape_properties(env_handle, box_lift_handle, box_lift_rigid_shape_props)
-            ###
-            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_rigid_body_color(env_handle, box_lift_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
-            self.box_lift_idxs.append(self.gym.get_actor_index(env_handle, box_lift_handle, gymapi.DOMAIN_SIM))
-            
-            ## Task Transfer
-            ### Add front table
-            front_table_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.front_table_offset, device=self.device)))
-            front_table_handle = self.gym.create_actor(env_handle, front_table_asset, front_table_pose, "front_table", i, 0)
-            self.front_table_idxs.append(self.gym.get_actor_index(env_handle, front_table_handle, gymapi.DOMAIN_SIM))
-            ### Add back table
-            back_table_pose.p = gymapi.Vec3(*(pos[:3] + torch.tensor(self.cfg.asset.back_table_offset, device=self.device)))
-            back_table_handle = self.gym.create_actor(env_handle, back_table_asset, back_table_pose, "back_table", i, 0)
-            self.back_table_idxs.append(self.gym.get_actor_index(env_handle, back_table_handle, gymapi.DOMAIN_SIM))
-            ### Add box transfer
-            box_transfer_pose.p.x = front_table_pose.p.x + np.random.uniform(*self.cfg.asset.box_transfer_range_x)
-            box_transfer_pose.p.y = front_table_pose.p.y + np.random.uniform(*self.cfg.asset.box_transfer_range_y)
-            box_transfer_pose.p.z = front_table_pose.p.z + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * self.cfg.asset.box_transfer_size
-            # box_transfer_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
-            box_transfer_handle = self.gym.create_actor(env_handle, box_transfer_asset, box_transfer_pose, "box_transfer", i, 0)
-            ### change box actor properties
-            box_transfer_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, box_transfer_handle)
-            for prop in box_transfer_rigid_body_props:
-                prop.mass = self.cfg.asset.box_transfer_mass # change mass here!
-            ###
-            color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
-            self.gym.set_rigid_body_color(env_handle, box_transfer_handle, 0, gymapi.MESH_VISUAL_AND_COLLISION, color)
-            self.box_transfer_idxs.append(self.gym.get_actor_index(env_handle, box_transfer_handle, gymapi.DOMAIN_SIM))
+            small_box_idx, _ = self._spawn_small_box_on_front_table(env_handle, i, current_front_table_pose, small_box_asset, small_box_pose, small_box_size)
+            self.small_box_idxs.append(small_box_idx)
 
+            big_box_idx = self._spawn_big_box(env_handle, i, pos, big_box_asset, big_box_pose, big_box_size)
+            self.big_box_idxs.append(big_box_idx)
+
+            wall_idx = self._spawn_wall(env_handle, i, pos, wall_asset, wall_pose)
+            self.wall_idxs.append(wall_idx)
+
+            cabinet_idx, _ = self._spawn_cabinet(env_handle, i, pos, cabinet_asset, cabinet_pose, cabinet_dof_props, cabinet_default_dof_state)
+            self.cabinet_idxs.append(cabinet_idx)
 
         self._create_sensors_all()
         self.humanoid_idxs = torch.tensor(self.humanoid_idxs, device=self.device)
-
-        ## Task ball
-        self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device)
         self.door_idxs = torch.tensor(self.door_idxs, device=self.device)
-        ## Task box
-        self.table_idxs = torch.tensor(self.table_idxs, device=self.device)
-        self.box_idxs = torch.tensor(self.box_idxs, device=self.device)
-        ## Task button
-        self.wall_idxs = torch.tensor(self.wall_idxs, device=self.device)
-        ## Task cabinet
-        self.arti_obj_idxs = torch.tensor(self.arti_obj_idxs, device=self.device)
-        ## Task carry
-        self.box_carry_idxs = torch.tensor(self.box_carry_idxs, device=self.device)
-        ## Task lift
-        self.box_lift_idxs = torch.tensor(self.box_lift_idxs, device=self.device)
-        ## Task transfer
+        self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device)
         self.front_table_idxs = torch.tensor(self.front_table_idxs, device=self.device)
         self.back_table_idxs = torch.tensor(self.back_table_idxs, device=self.device)
-        self.box_transfer_idxs = torch.tensor(self.box_transfer_idxs, device=self.device)
-
+        self.small_box_idxs = torch.tensor(self.small_box_idxs, device=self.device)
+        self.big_box_idxs = torch.tensor(self.big_box_idxs, device=self.device)
+        self.wall_idxs = torch.tensor(self.wall_idxs, device=self.device)
+        self.cabinet_idxs = torch.tensor(self.cabinet_idxs, device=self.device)
 
         ### Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
@@ -570,28 +635,19 @@ class H1UnifiedTask(LeggedRobot):
 
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
+        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
+        self.rigid_state = gymtorch.wrap_tensor(rigid_body_state).view(self.num_envs, -1, 13)
+
         self.humanoid_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.humanoid_idxs[0]]
         
-        # Task ball
         self.ball_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.ball_idxs[0]]
-        # Task box
-        self.table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.table_idxs[0]]
-        self.box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_idxs[0]]
-        # Task button
-        self.wall_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.wall_idxs[0]]
-        # Task cabinet
-        self.arti_obj_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.arti_obj_idxs[0]]
-        # Task carry
-        self.box_carry_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_carry_idxs[0]]
-        # Task lift
-        self.box_lift_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_lift_idxs[0]]
-        # Task transfer
         self.front_table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.front_table_idxs[0]]
         self.back_table_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.back_table_idxs[0]]
-        self.box_transfer_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.box_transfer_idxs[0]]
-
-
-        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
+        self.small_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.small_box_idxs[0]]
+        self.big_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.big_box_idxs[0]]
+        self.wall_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.wall_idxs[0]]
+        self.cabinet_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.cabinet_idxs[0]]
         
         # Task cabinet
         self.humanoid_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_dof]
@@ -599,11 +655,9 @@ class H1UnifiedTask(LeggedRobot):
 
         self.dof_pos = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.dof_vel = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+        
         self.base_quat = self.humanoid_root_states[:, 3:7]
         self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
-
-        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
-        self.rigid_state = gymtorch.wrap_tensor(rigid_body_state).view(self.num_envs, -1, 13)
 
         # initialize some data used later on
         self.common_step_counter = 0
@@ -676,7 +730,7 @@ class H1UnifiedTask(LeggedRobot):
         self.dof_vel[env_ids] = 0.
 
         ## Task cabinet
-        self._reset_task_cabinet(env_ids)
+        self._reset_cabinet_dofs(env_ids)
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
@@ -684,10 +738,10 @@ class H1UnifiedTask(LeggedRobot):
                                               gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
         
         ## Task cabinet
-        arti_obj_ids_int32 = self.arti_obj_idxs[env_ids].to(dtype=torch.int32)
+        cabinet_ids_int32 = self.cabinet_idxs[env_ids].to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
-                                              gymtorch.unwrap_tensor(arti_obj_ids_int32), len(arti_obj_ids_int32))
+                                              gymtorch.unwrap_tensor(cabinet_ids_int32), len(cabinet_ids_int32))
 
     def _reset_root_states(self, env_ids):
         """ Resets ROOT states position and velocities of selected environmments
@@ -710,20 +764,14 @@ class H1UnifiedTask(LeggedRobot):
             self.humanoid_root_states[env_ids, 7:13] = 0
             self.humanoid_root_states[env_ids, 2] += 1.8
         
-        ## Task ball
-        self._reset_task_ball(env_ids)
-        ## Task box
-        self._reset_task_box(env_ids)
-        ## Task button
-        self._reset_task_button(env_ids)
-        ## Task cabinet
-        self._reset_task_cabinet(env_ids)
-        ## Task carry
-        self._reset_task_carry(env_ids)
-        ## Task lift
-        self._reset_task_lift(env_ids)
-        ## Task transfer
-        self._reset_task_transfer(env_ids)
+        self._reset_door_states(env_ids)
+        self._reset_ball_states(env_ids)
+        self._reset_front_table_states(env_ids)
+        self._reset_back_table_states(env_ids)
+        self._reset_small_box_states(env_ids)
+        self._reset_big_box_states(env_ids)
+        self._reset_wall_states(env_ids)
+        self._reset_cabinet_states(env_ids)
         
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
                 

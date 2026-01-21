@@ -53,9 +53,8 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         replace_cylinder_with_capsule = False # replace collision cylinders with capsules, leads to faster/more stable simulation
         fix_base_link = False
         collapse_fixed_joints = False
-        
-        # Task ball
-        ## Door
+
+        # Door
         door_dims = [
             [0.05, 4.0, 2.0],
             [1.0, 0.05, 2.0],
@@ -66,63 +65,48 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             [4.5, 2.0, 1.0],
             [4.5, -2.0, 1.0]
         ]
-        ## Ball
+
+        # Ball
         ball_size = 0.2
         ball_range_x = [0.5, 1.0]
         ball_range_y = [-0.3, 0.3]
         ball_range_mass = [0.3, 0.5]
 
-        # Task box
-        ## Table
-        table_dims = [0.9, 1.5, 0.05]
-        table_offset = [1.0, 0.0, 0.975]
-        ## Box
-        box_size = 0.1
-        box_range_x = [-0.45, -0.35]
-        box_range_y = [-0.3, 0.3]
+        # Front table
+        front_table_dims = [0.9, 1.5, 0.05]
+        front_table_offset = [1.0, 0.0, 0.975]
 
-        # Task button
-        ## Wall
+        # Back table
+        back_table_dims = [0.9, 1.5, 0.05]
+        back_table_offset = [-1.0, 0.0, 0.975]
+
+        # Small box
+        small_box_size = 0.1
+        small_box_transfer_mass = 0.01
+        small_box_range_x = [-0.45, -0.35]
+        small_box_range_y = [-0.3, 0.3]
+
+        # Big box
+        big_box_size = [0.5, 0.1, 1.0]
+        big_box_offset_xy = [1.0, 0.0]
+        big_box_range_x = [-0.5, -0.3]
+        big_box_range_y = [-0.05, 0.05]
+        big_box_range_mass = [0.1, 2.0]
+
+        # Wall
         wall_dims = [0.05, 2.0, 3.0]
         wall_offset = [1.5, 0.0, 1.5]
-        ## Button
+
+        # Button
         button_ori_z = 1.0
 
-        # Task cabinet
-        ## Cabinet
+        # Cabinet
         gapartnet_root = "resources/objects/gapartnet/"
         gapartnet_id = 45159
         arti_obj_offset = [1.5, 0.0, 1.0]
         arti_obj_dof_default = 1.0
         arti_obj_scale = 0.5
 
-        # Task carry
-        ## Box carry
-        box_carry_size = [0.5, 0.1, 1.0]
-        box_carry_offset_xy = [1.0, 0.0]
-        box_carry_range_x = [-0.5, -0.3]
-        box_carry_range_y = [-0.05, 0.05]
-        box_carry_range_mass = [0.1, 2.0]
-
-        # Task lift
-        ## Box lift
-        box_lift_size = [0.5, 0.1, 1.0]
-        box_lift_offset_xy = [1.0, 0.0]
-        box_lift_range_x = [-0.5, -0.3]
-        box_lift_range_y = [-0.05, 0.05]
-        box_lift_range_mass = [0.1, 2.0]
-
-        # Task transfer
-        ## Table
-        front_table_dims = [0.9, 1.5, 0.05]
-        front_table_offset = [1.0, 0.0, 0.975]
-        back_table_dims = [0.9, 1.5, 0.05]
-        back_table_offset = [-1.0, 0.0, 0.975]
-        ## Box transfer
-        box_transfer_size = 0.1
-        box_transfer_mass = 0.01
-        box_transfer_range_x = [-0.45, -0.35]
-        box_transfer_range_y = [-0.3, 0.3]
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
