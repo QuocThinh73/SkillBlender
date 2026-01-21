@@ -201,10 +201,12 @@ class ActorCriticHierarchical(nn.Module):
             command = torch.clamp(command, low, high)
         new_observations = observations.clone().reshape(observations.shape[0], self.frame_stack, -1)
         num_envs, frame_stack, num_single_obs = new_observations.shape
-        state_dim = num_single_obs - self.command_dim - 8 # 63
+        # state_dim = num_single_obs - self.command_dim - 8 # 63
+        state_dim = num_single_obs - self.command_dim - 3
         new_command = command.reshape(num_envs, frame_stack, -1)
         replaced_observations = torch.zeros((num_envs, frame_stack, state_dim + new_command.shape[-1]), device=self.device) # command: [num_envs, frame_stack*command_dim], e.g. [4096, 15*3]
-        replaced_observations[:, :, new_command.shape[-1]:] = new_observations[:, :, self.command_dim:-8]
+        # replaced_observations[:, :, new_command.shape[-1]:] = new_observations[:, :, self.command_dim:-8]
+        replaced_observations[:, :, new_command.shape[-1]:] = new_observations[:, :, self.command_dim:-3]
         replaced_observations[:, :, :new_command.shape[-1]] = new_command
         return replaced_observations.reshape(num_envs, -1)
     
