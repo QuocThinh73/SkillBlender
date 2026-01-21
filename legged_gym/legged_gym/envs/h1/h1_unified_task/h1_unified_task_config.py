@@ -29,8 +29,8 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 26 + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 16
-        episode_length_s = 24  # episode length in seconds
+        num_envs = 4096
+        episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
 
@@ -103,9 +103,9 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         # Cabinet
         gapartnet_root = "resources/objects/gapartnet/"
         gapartnet_id = 45159
-        arti_obj_offset = [1.5, 0.0, 1.0]
-        arti_obj_dof_default = 1.0
-        arti_obj_scale = 0.5
+        cabinet_offset = [1.5, 0.0, 1.0]
+        cabinet_dof_default = 1.0
+        cabinet_scale = 0.5
 
 
     class terrain(LeggedRobotCfg.terrain):
@@ -263,8 +263,8 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
             wrist_button_distance = 5
             right_arm_default = 0.5
             # Task cabinet
-            wrist_arti_obj_distance = 5
-            arti_obj_dof = 5
+            wrist_cabinet_distance = 5
+            cabinet_dof = 5
             # Task carry
             box_carry_pos = 5
             wrist_box_carry_distance = 5

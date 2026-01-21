@@ -298,7 +298,7 @@ class H1UnifiedTask(LeggedRobot):
 
         # Default DOF
         default_dof_pos = np.zeros(num_dofs, dtype=np.float32)
-        default_dof_pos[:] = self.cfg.asset.arti_obj_dof_default
+        default_dof_pos[:] = self.cfg.asset.cabinet_dof_default
         default_dof_state = np.zeros(num_dofs, gymapi.DofState.dtype)
         default_dof_state["pos"] = default_dof_pos
 
@@ -447,7 +447,7 @@ class H1UnifiedTask(LeggedRobot):
         return idx
 
     def _spawn_cabinet(self, env_handle, env_id, base_pos, cabinet_asset, cabinet_pose, cabinet_dof_props, cabinet_default_dof_state):
-        offset = self.cfg.asset.arti_obj_offset
+        offset = self.cfg.asset.cabinet_offset
         cabinet_pose.p = gymapi.Vec3(
             base_pos[0].item() + offset[0],
             base_pos[1].item() + offset[1],
@@ -458,7 +458,7 @@ class H1UnifiedTask(LeggedRobot):
 
         self.gym.set_actor_dof_properties(env_handle, cabinet_handle, cabinet_dof_props)
         self.gym.set_actor_dof_states(env_handle, cabinet_handle, cabinet_default_dof_state, gymapi.STATE_ALL)
-        self.gym.set_actor_scale(env_handle, cabinet_handle, self.cfg.asset.arti_obj_scale)
+        self.gym.set_actor_scale(env_handle, cabinet_handle, self.cfg.asset.cabinet_scale)
 
         return cabinet_idx, cabinet_handle
 
@@ -650,7 +650,7 @@ class H1UnifiedTask(LeggedRobot):
         
         # Task cabinet
         self.humanoid_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_dof]
-        self.arti_obj_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_dof:]
+        self.cabinet_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_dof:]
 
         self.dof_pos = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.dof_vel = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
@@ -749,9 +749,9 @@ class H1UnifiedTask(LeggedRobot):
         if len(active_ids) == 0:
             return
         
-        self.arti_obj_dof_state[active_ids, :, 0] = self.cfg.asset.arti_obj_dof_default
-        self.arti_obj_dof_state[active_ids, :, 1] = 0.0
-        self.arti_obj_dof_goal = 0
+        self.cabinet_dof_state[active_ids, :, 0] = self.cfg.asset.cabinet_dof_default
+        self.cabinet_dof_state[active_ids, :, 1] = 0.0
+        self.cabinet_dof_goal = 0
 
     def _reset_root_states(self, env_ids):
         """ Resets ROOT states position and velocities of selected environmments
@@ -954,9 +954,9 @@ class H1UnifiedTask(LeggedRobot):
         
         pos = self.env_origins[active_ids].clone()
 
-        self.cabinet_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.arti_obj_offset[0]
-        self.cabinet_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.arti_obj_offset[1]
-        self.cabinet_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.arti_obj_offset[2]
+        self.cabinet_root_states[active_ids, 0] = pos[:, 0] + self.cfg.asset.cabinet_offset[0]
+        self.cabinet_root_states[active_ids, 1] = pos[:, 1] + self.cfg.asset.cabinet_offset[1]
+        self.cabinet_root_states[active_ids, 2] = pos[:, 2] + self.cfg.asset.cabinet_offset[2]
         self.cabinet_root_states[active_ids, 7:13] = 0.0
 
     def step(self, actions):
@@ -975,8 +975,8 @@ class H1UnifiedTask(LeggedRobot):
         self.render()
         for _ in range(self.cfg.control.decimation):
             self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
-            arti_obj_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
-            full_force_buffer = torch.cat((self.torques, arti_obj_force_buffer), dim=1) # [num_envs, num_dofs + cabinet_num_dofs]
+            cabinet_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
+            full_force_buffer = torch.cat((self.torques, cabinet_force_buffer), dim=1) # [num_envs, num_dofs + cabinet_num_dofs]
             humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
             self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
                                                             gymtorch.unwrap_tensor(full_force_buffer),
@@ -1156,19 +1156,19 @@ class H1UnifiedTask(LeggedRobot):
         if torch.any(task_cabinet_mask):
             wrist_pos = self.rigid_state[task_cabinet_mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
             # torso_pos = self.rigid_state[task_cabinet_mask, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
-            arti_obj_pos = self.cabinet_root_states[task_cabinet_mask, :3] # [num_envs, 3]
-            arti_obj_dof_pos = self.arti_obj_dof_state[task_cabinet_mask][:, :, 0] # [num_envs, 2]
-            arti_obj_dof_goal = self.arti_obj_dof_goal # 0
-            arti_obj_dof_diff_obs = arti_obj_dof_pos - arti_obj_dof_goal # [num_envs, 2]
-            wrist_arti_obj_diff = wrist_pos - arti_obj_pos.unsqueeze(1) # [num_envs, 2, 3]
-            wrist_arti_obj_diff_obs = torch.flatten(wrist_arti_obj_diff, start_dim=1) # [num_envs, 6]
+            cabinet_pos = self.cabinet_root_states[task_cabinet_mask, :3] # [num_envs, 3]
+            cabinet_dof_pos = self.cabinet_dof_state[task_cabinet_mask][:, :, 0] # [num_envs, 2]
+            cabinet_dof_goal = self.cabinet_dof_goal # 0
+            cabinet_dof_diff_obs = cabinet_dof_pos - cabinet_dof_goal # [num_envs, 2]
+            wrist_cabinet_diff = wrist_pos - cabinet_pos.unsqueeze(1) # [num_envs, 2, 3]
+            wrist_cabinet_diff_obs = torch.flatten(wrist_cabinet_diff, start_dim=1) # [num_envs, 6]
 
-            task_cabinet_obs = torch.cat((arti_obj_dof_diff_obs, wrist_arti_obj_diff_obs), dim=-1)
+            task_cabinet_obs = torch.cat((cabinet_dof_diff_obs, wrist_cabinet_diff_obs), dim=-1)
             task_specific_obs_buf[task_cabinet_mask, :8] = task_cabinet_obs
 
             task_cabinet_privileged_obs = torch.cat((
-                arti_obj_dof_diff_obs, # 2
-                wrist_arti_obj_diff_obs, # 6
+                cabinet_dof_diff_obs, # 2
+                wrist_cabinet_diff_obs, # 6
             ), dim=-1)
             task_specific_privileged_obs_buf[task_cabinet_mask, :8] = task_cabinet_privileged_obs
 
@@ -1199,7 +1199,6 @@ class H1UnifiedTask(LeggedRobot):
             ), dim=-1)
             task_specific_privileged_obs_buf[task_carry_mask, :21] = task_carry_privileged_obs
 
-
         # Task lift observations
         task_lift_mask = (self.task_ids == self.cfg.task.TASK_LIFT)
         if torch.any(task_lift_mask):
@@ -1226,7 +1225,6 @@ class H1UnifiedTask(LeggedRobot):
                 wrist_box_diff_obs, # 6
             ), dim=-1)
             task_specific_privileged_obs_buf[task_lift_mask, :21] = task_lift_privileged_obs
-
 
         # Task reach observations
         task_reach_mask = (self.task_ids == self.cfg.task.TASK_REACH)
@@ -1390,7 +1388,6 @@ class H1UnifiedTask(LeggedRobot):
     
     def _reward_ball_pos(self):
         reward = torch.zeros(self.num_envs, device=self.device)
-        error = torch.zeros(self.num_envs, device=self.device)
 
         mask = (self.task_ids == self.cfg.task.TASK_BALL)
 
@@ -1399,9 +1396,8 @@ class H1UnifiedTask(LeggedRobot):
             ball_goal_error = torch.mean(torch.abs(ball_goal_diff), dim=1)
 
             reward[mask] = torch.exp(-1 * ball_goal_error)
-            error[mask] = ball_goal_error
 
-        return reward, error
+        return reward, ball_goal_error
 
     # Task box rewards
     def _reward_wrist_pos(self):
@@ -1512,7 +1508,7 @@ class H1UnifiedTask(LeggedRobot):
         return reward, error
 
     # Task cabinet rewards
-    def _reward_torso_arti_obj_distance(self):
+    def _reward_torso_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
 
@@ -1520,17 +1516,17 @@ class H1UnifiedTask(LeggedRobot):
 
         if torch.any(mask):
             torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
-            arti_obj_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
-            torso_arti_obj_diff = arti_obj_pos - torso_pos # [num_envs, 3]
-            torso_arti_obj_distance = torch.norm(torso_arti_obj_diff, dim=1) # [num_envs]
-            torso_arti_obj_distance[torso_arti_obj_distance < 0.1] = 0 # ignore small distance
+            cabinet_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
+            torso_cabinet_diff = cabinet_pos - torso_pos # [num_envs, 3]
+            torso_cabinet_distance = torch.norm(torso_cabinet_diff, dim=1) # [num_envs]
+            torso_cabinet_distance[torso_cabinet_distance < 0.1] = 0 # ignore small distance
 
-            reward[mask] = torch.exp(-4 * torso_arti_obj_distance)
-            error[mask] = torso_arti_obj_distance
+            reward[mask] = torch.exp(-4 * torso_cabinet_distance)
+            error[mask] = torso_cabinet_distance
 
         return reward, error
 
-    def _reward_wrist_arti_obj_distance(self):
+    def _reward_wrist_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
 
@@ -1538,19 +1534,19 @@ class H1UnifiedTask(LeggedRobot):
     
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
-            arti_obj_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
-            wrist_arti_obj_diff = wrist_pos - arti_obj_pos.unsqueeze(1) # [num_envs, 2, 3]
-            wrist_arti_obj_diff = torch.flatten(wrist_arti_obj_diff, start_dim=1) # [num_envs, 6]
-            wrist_arti_obj_error = torch.mean(torch.abs(wrist_arti_obj_diff), dim=1)
+            cabinet_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
+            wrist_cabinet_diff = wrist_pos - cabinet_pos.unsqueeze(1) # [num_envs, 2, 3]
+            wrist_cabinet_diff = torch.flatten(wrist_cabinet_diff, start_dim=1) # [num_envs, 6]
+            wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * wrist_arti_obj_error)
-            error[mask] = wrist_arti_obj_error
+            reward[mask] = torch.exp(-4 * wrist_cabinet_error)
+            error[mask] = wrist_cabinet_error
 
         return reward, error
 
-    def _reward_arti_obj_dof(self):
+    def _reward_cabinet_dof(self):
         """
-        Calculates the reward based on the difference between the current arti_obj dof positions and the target dof positions.
+        Calculates the reward based on the difference between the current cabinet dof positions and the target dof positions.
         """
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
@@ -1558,11 +1554,11 @@ class H1UnifiedTask(LeggedRobot):
         mask = (self.task_ids == self.cfg.task.TASK_CABINET)
     
         if torch.any(mask):
-            arti_obj_dof_diff = self.arti_obj_dof_state[mask][:, :, 0] - self.arti_obj_dof_goal # [num_envs, 2]
-            arti_obj_dof_error = torch.mean(torch.abs(arti_obj_dof_diff), dim=1)
+            cabinet_dof_diff = self.cabinet_dof_state[mask][:, :, 0] - self.cabinet_dof_goal # [num_envs, 2]
+            cabinet_dof_error = torch.mean(torch.abs(cabinet_dof_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * arti_obj_dof_error)
-            error[mask] = arti_obj_dof_error
+            reward[mask] = torch.exp(-4 * cabinet_dof_error)
+            error[mask] = cabinet_dof_error
 
         return reward, error
 
