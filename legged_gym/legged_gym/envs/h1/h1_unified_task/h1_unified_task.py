@@ -1403,7 +1403,7 @@ class H1UnifiedTask(LeggedRobot):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
 
-        mask = (self.task_ids == self.cfg.task.TASK_BOX)
+        mask = (self.task_ids == self.cfg.task.TASK_BOX) | (self.task_ids == self.cfg.task.TASK_TRANSFER)
 
         if torch.any(mask):
             small_box_pos_diff = self.small_box_root_states[mask, :3] - self.small_box_goal_pos[mask]
@@ -1418,7 +1418,7 @@ class H1UnifiedTask(LeggedRobot):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
 
-        mask = (self.task_ids == self.cfg.task.TASK_BOX)
+        mask = (self.task_ids == self.cfg.task.TASK_BOX) | (self.task_ids == self.cfg.task.TASK_TRANSFER)
 
         if torch.any(mask):
             wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
@@ -1524,23 +1524,6 @@ class H1UnifiedTask(LeggedRobot):
             error[mask] = cabinet_dof_error
 
         return reward, error
-
-    def _reward_wrist_ref_wrist_distance(self):
-        reward = torch.zeros(self.num_envs, device=self.device)
-        error = torch.zeros(self.num_envs, device=self.device)
-
-        mask = (self.task_ids == self.cfg.task.TASK_CARRY)
-    
-        if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
-            wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[mask][:,:,:3] # [num_envs, 2, 3], two hands, position only
-            wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
-            wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
-
-            reward[mask] = torch.exp(-4 * wrist_pos_error)
-            error[mask] = wrist_pos_error
-
-        return reward, error
     
     def _reward_big_box_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1589,5 +1572,22 @@ class H1UnifiedTask(LeggedRobot):
 
             reward[mask] = torch.exp(-4 * wrist_big_box_error)
             error[mask] = wrist_big_box_error
+
+        return reward, error
+    
+    def _reward_wrist_ref_wrist_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+
+        mask = (self.task_ids == self.cfg.task.TASK_REACH)
+    
+        if torch.any(mask):
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
+            wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[mask][:,:,:3] # [num_envs, 2, 3], two hands, position only
+            wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
+            wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * wrist_pos_error)
+            error[mask] = wrist_pos_error
 
         return reward, error
