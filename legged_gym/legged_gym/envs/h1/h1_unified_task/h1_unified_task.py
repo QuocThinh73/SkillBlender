@@ -812,38 +812,40 @@ class H1UnifiedTask(LeggedRobot):
             len(all_actor_indices)
         )
         
-    def _set_object_simulation_status(self, env_ids, actor_idxs_tensor, enable=True):
+    def _set_object_simulation_status(self, env_ids, object_name, is_multipart=False, num_parts=0, enable=True):
         env_ids_cpu = env_ids.cpu().numpy()
-        actor_idxs_cpu = actor_idxs_tensor[env_ids].cpu().numpy()
 
-        for i, env_id in enumerate(env_ids_cpu):
+        for env_id in env_ids_cpu:
             env_handle = self.envs[env_id]
             
-            current_actors = actor_idxs_cpu[i]
-            
-            if np.ndim(current_actors) == 0:
-                current_actors = [current_actors]
-                
-            for actor_handle in current_actors:
-                actor_handle = int(actor_handle)
-                
-                props = self.gym.get_actor_rigid_body_properties(env_handle, actor_handle)
-                
-                changed = False
-                for prop in props:
-                    if enable:
-                        if (prop.flags & gymapi.RIGID_BODY_DISABLE_SIMULATION) or (prop.flags & gymapi.RIGID_BODY_DISABLE_GRAVITY):
-                            prop.flags &= ~gymapi.RIGID_BODY_DISABLE_SIMULATION
-                            prop.flags &= ~gymapi.RIGID_BODY_DISABLE_GRAVITY
-                            changed = True
-                    else:
-                        if not (prop.flags & gymapi.RIGID_BODY_DISABLE_SIMULATION):
-                            prop.flags |= gymapi.RIGID_BODY_DISABLE_SIMULATION
-                            prop.flags |= gymapi.RIGID_BODY_DISABLE_GRAVITY
-                            changed = True
-                
-                if changed:
-                    self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, props, recomputeInertia=False)
+            target_names = []
+            if is_multipart:
+                for i in range(num_parts):
+                    target_names.append(f"{object_name}_{i}")
+            else:
+                target_names.append(object_name)
+
+            for name in target_names:
+                actor_handle = self.gym.find_actor_handle(env_handle, name)
+
+                if actor_handle != gymapi.INVALID_HANDLE:
+                    props = self.gym.get_actor_rigid_body_properties(env_handle, actor_handle)
+                    
+                    changed = False
+                    for prop in props:
+                        if enable:
+                            if (prop.flags & gymapi.RIGID_BODY_DISABLE_SIMULATION) or (prop.flags & gymapi.RIGID_BODY_DISABLE_GRAVITY):
+                                prop.flags &= ~gymapi.RIGID_BODY_DISABLE_SIMULATION
+                                prop.flags &= ~gymapi.RIGID_BODY_DISABLE_GRAVITY
+                                changed = True
+                        else:
+                            if not (prop.flags & gymapi.RIGID_BODY_DISABLE_SIMULATION):
+                                prop.flags |= gymapi.RIGID_BODY_DISABLE_SIMULATION
+                                prop.flags |= gymapi.RIGID_BODY_DISABLE_GRAVITY
+                                changed = True
+                    
+                    if changed:
+                        self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, props, recomputeInertia=False)
 
     def _hide_all_assets(self, env_ids):
         self.ball_root_states[env_ids, 2] = self.hidden_z
@@ -871,14 +873,14 @@ class H1UnifiedTask(LeggedRobot):
         self.cabinet_root_states[env_ids, 2] = self.hidden_z
         self.cabinet_root_states[env_ids, 7:13] = 0
         
-        self._set_object_simulation_status(env_ids, self.ball_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.small_box_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.big_box_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.wall_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.cabinet_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.front_table_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.back_table_idxs, enable=False)
-        self._set_object_simulation_status(env_ids, self.root_states[door_actor_ids], enable=False)
+        self._set_object_simulation_status(env_ids, "ball", enable=False)
+        self._set_object_simulation_status(env_ids, "small_box", enable=False)
+        self._set_object_simulation_status(env_ids, "big_box", enable=False)
+        self._set_object_simulation_status(env_ids, "wall", enable=False)
+        self._set_object_simulation_status(env_ids, "cabinet", enable=False)
+        self._set_object_simulation_status(env_ids, "front_table", enable=False)
+        self._set_object_simulation_status(env_ids, "back_table", enable=False)
+        self._set_object_simulation_status(env_ids, "door", is_multipart=True, num_parts=self.num_door_parts, enable=False)
 
     def _reset_door_states(self, env_ids):
         active_mask = (self.task_ids[env_ids] == self.cfg.task.TASK_BALL)
