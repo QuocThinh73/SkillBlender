@@ -261,17 +261,17 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
 
         class scales:
-            torso_ori_ball_distance = 1
-            ball_goal_distance = 5
-            small_box_goal_distance = 5
-            wrist_small_box_distance = 5
+            # torso_ori_ball_distance = 1
+            # ball_goal_distance = 5
+            # small_box_goal_distance = 5
+            # wrist_small_box_distance = 5
             wrist_button_distance = 5
             right_arm_default = 0.5
             torso_cabinet_distance = 5
             wrist_cabinet_distance = 5
             cabinet_dof_goal = 5
-            big_box_goal_distance = 5
-            wrist_big_box_distance = 5
+            # big_box_goal_distance = 5
+            # wrist_big_box_distance = 5
             wrist_ref_wrist_distance = 5
 
     class sensor(LeggedRobotCfg.sensor):
