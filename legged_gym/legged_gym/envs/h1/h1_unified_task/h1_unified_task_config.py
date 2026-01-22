@@ -37,7 +37,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 1024
+        num_envs = 16
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
