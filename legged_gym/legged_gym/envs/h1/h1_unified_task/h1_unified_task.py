@@ -309,8 +309,8 @@ class H1UnifiedTask(LeggedRobot):
 
         return cabinet_asset, cabinet_pose, num_dofs, dof_props, default_dof_state
 
-    def _spawn_actor(self, env_handle, asset, pose, name, collision_group, collision_filter, segmentation_id=0):
-        h = self.gym.create_actor(env_handle, asset, pose, name, collision_group, collision_filter, segmentation_id)
+    def _spawn_actor(self, env_handle, asset, pose, name, collision_group, collision_filter):
+        h = self.gym.create_actor(env_handle, asset, pose, name, collision_group, collision_filter)
         idx = self.gym.get_actor_index(env_handle, h, gymapi.DOMAIN_SIM)
         return h, idx
 
@@ -324,7 +324,7 @@ class H1UnifiedTask(LeggedRobot):
         rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, env_id)
         self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
 
-        robot_handle, robot_idx = self._spawn_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, env_id, self.cfg.asset.self_collisions, 0)
+        robot_handle, robot_idx = self._spawn_actor(env_handle, robot_asset, start_pose, self.cfg.asset.name, env_id, self.cfg.asset.self_collisions)
 
         dof_props = self._process_dof_props(dof_props_asset, env_id)
         self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
@@ -345,7 +345,7 @@ class H1UnifiedTask(LeggedRobot):
                 base_pos[2].item() + offset[2],
             )
 
-            _, idx = self._spawn_actor(env_handle, door_asset, door_pose, f"door_{door_i}", env_id, 0)
+            _, idx = self._spawn_actor(env_handle, door_asset, door_pose, f"door_{door_i}", env_id, self.cfg.asset.self_collisions)
             env_door_idxs.append(idx)
 
         return env_door_idxs
@@ -356,7 +356,7 @@ class H1UnifiedTask(LeggedRobot):
             ball_pose.p.z = base_pos[2].item() + 0.5 * ball_size
             ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
 
-            ball_handle, ball_idx = self._spawn_actor(env_handle, ball_asset, ball_pose, "ball", env_id, 0)
+            ball_handle, ball_idx = self._spawn_actor(env_handle, ball_asset, ball_pose, "ball", env_id, self.cfg.asset.self_collisions)
 
             ball_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, ball_handle)
 
@@ -378,7 +378,7 @@ class H1UnifiedTask(LeggedRobot):
             base_pos[2].item() + offset[2],
         )
 
-        _, idx = self._spawn_actor(env_handle, front_table_asset, front_table_pose, "front_table", env_id, 0)
+        _, idx = self._spawn_actor(env_handle, front_table_asset, front_table_pose, "front_table", env_id, self.cfg.asset.self_collisions)
 
         return idx, front_table_pose
 
@@ -390,7 +390,7 @@ class H1UnifiedTask(LeggedRobot):
             base_pos[2].item() + offset[2],
         )
 
-        _, idx = self._spawn_actor(env_handle, back_table_asset, back_table_pose, "back_table", env_id, 0)
+        _, idx = self._spawn_actor(env_handle, back_table_asset, back_table_pose, "back_table", env_id, self.cfg.asset.self_collisions)
 
         return idx, back_table_pose
 
@@ -400,7 +400,7 @@ class H1UnifiedTask(LeggedRobot):
         small_box_pose.p.z = front_table_pose.p.z + 0.5 * self.cfg.asset.front_table_dims[2] + 0.5 * small_box_size
         small_box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-math.pi, math.pi))
 
-        box_handle, box_idx = self._spawn_actor(env_handle, small_box_asset, small_box_pose, "small_box", env_id, 0)
+        box_handle, box_idx = self._spawn_actor(env_handle, small_box_asset, small_box_pose, "small_box", env_id, self.cfg.asset.self_collisions)
 
         color = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
 
@@ -416,7 +416,7 @@ class H1UnifiedTask(LeggedRobot):
             base_pos[2].item() + 0.5 * big_box_size.z,
         )
         
-        h, idx = self._spawn_actor(env_handle, big_box_asset, big_box_pose, "big_box", env_id, 0)
+        h, idx = self._spawn_actor(env_handle, big_box_asset, big_box_pose, "big_box", env_id, self.cfg.asset.self_collisions)
 
         big_box_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, h)
         for prop in big_box_rigid_body_props:
@@ -441,7 +441,7 @@ class H1UnifiedTask(LeggedRobot):
             base_pos[2].item() + offset[2],
         )
 
-        _, idx = self._spawn_actor(env_handle, wall_asset, wall_pose, "wall", env_id, 0)
+        _, idx = self._spawn_actor(env_handle, wall_asset, wall_pose, "wall", env_id, self.cfg.asset.self_collisions)
 
         return idx
 
@@ -453,7 +453,7 @@ class H1UnifiedTask(LeggedRobot):
             base_pos[2].item() + offset[2],
         )
 
-        cabinet_handle, cabinet_idx = self._spawn_actor(env_handle, cabinet_asset, cabinet_pose, "cabinet", env_id, 0)
+        cabinet_handle, cabinet_idx = self._spawn_actor(env_handle, cabinet_asset, cabinet_pose, "cabinet", env_id, self.cfg.asset.self_collisions)
 
         self.gym.set_actor_dof_properties(env_handle, cabinet_handle, cabinet_dof_props)
         self.gym.set_actor_dof_states(env_handle, cabinet_handle, cabinet_default_dof_state, gymapi.STATE_ALL)
@@ -813,7 +813,11 @@ class H1UnifiedTask(LeggedRobot):
         )
 
     def _hide_all_assets(self, env_ids):
-        self.ball_root_states[env_ids, 2] = self.hidden_z
+        pos = self.env_origins[env_ids].clone()
+
+        self.ball_root_states[env_ids, 0] = pos[:, 0] - 10
+        self.ball_root_states[env_ids, 1] = pos[:, 1] - 10
+        self.ball_root_states[env_ids, 2] = self.hidden_z * 3
         self.ball_root_states[env_ids, 7:13] = 0
 
         door_actor_ids = self.door_idxs[env_ids].flatten()
@@ -826,16 +830,22 @@ class H1UnifiedTask(LeggedRobot):
         self.back_table_root_states[env_ids, 2] = self.hidden_z
         self.back_table_root_states[env_ids, 7:13] = 0
 
-        self.small_box_root_states[env_ids, 2] = self.hidden_z
+        self.small_box_root_states[env_ids, 0] = pos[:, 0] - 15
+        self.small_box_root_states[env_ids, 1] = pos[:, 1] - 15
+        self.small_box_root_states[env_ids, 2] = self.hidden_z * 3
         self.small_box_root_states[env_ids, 7:13] = 0
 
-        self.big_box_root_states[env_ids, 2] = self.hidden_z
+        self.big_box_root_states[env_ids, 0] = pos[:, 0] - 20
+        self.big_box_root_states[env_ids, 1] = pos[:, 1] - 20
+        self.big_box_root_states[env_ids, 2] = self.hidden_z * 3
         self.big_box_root_states[env_ids, 7:13] = 0
 
+        self.wall_root_states[env_ids, 0] = pos[:, 0]
+        self.wall_root_states[env_ids, 1] = pos[:, 1]
         self.wall_root_states[env_ids, 2] = self.hidden_z
         self.wall_root_states[env_ids, 7:13] = 0
 
-        self.cabinet_root_states[env_ids, 2] = self.hidden_z
+        self.cabinet_root_states[env_ids, 2] = self.hidden_z * 1.1
         self.cabinet_root_states[env_ids, 7:13] = 0
 
     def _reset_door_states(self, env_ids):
