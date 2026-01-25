@@ -66,24 +66,17 @@ class H1UnifiedTask(LeggedRobot):
         self.door_z_offsets = torch.tensor(door_z_offsets, device=self.device)
         self.num_door_parts = len(self.cfg.asset.door_offsets)
 
-        # Task box
+        # Task box and transfer
         self.small_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Task button
         self.button_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Task cabinet
+        self.cabinet_dof_goal = 0
 
-        # Task carry
+        # Task carry and lift
         self.big_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
-
-        # Task lift
-        self.big_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
-
-        # Task reach
-
-        # Task transfer
-        self.small_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
         self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
         self.gym.simulate(self.sim)
@@ -1317,8 +1310,8 @@ class H1UnifiedTask(LeggedRobot):
             self.small_box_goal_pos[transfer_env_ids, 2] = self.small_box_root_states[transfer_env_ids, 2]
         
     def reset_idx(self, env_ids):
-        self.task_ids[env_ids] = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
         super().reset_idx(env_ids)
+        self.task_ids[env_ids] = torch.randint(0, self.num_tasks, (len(env_ids),), device=self.device)
         self._sample_goals(env_ids)
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
@@ -1342,7 +1335,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * torso_ori_ball_pos_error)
             error[mask] = torso_ori_ball_pos_error
 
-        return reward, error
+        return reward, error, mask
     
     def _reward_ball_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1357,7 +1350,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-1 * ball_goal_error)
             error[mask] = ball_goal_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_small_box_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1372,7 +1365,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * small_box_pos_error)
             error[mask] = small_box_pos_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_wrist_small_box_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1391,7 +1384,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * wrist_small_box_error)
             error[mask] = wrist_small_box_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_wrist_button_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1409,7 +1402,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * wrist_button_error)
             error[mask] = wrist_button_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_right_arm_default(self):
         """
@@ -1429,7 +1422,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * right_arm_error)
             error[mask] = right_arm_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_torso_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1447,7 +1440,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * torso_cabinet_distance)
             error[mask] = torso_cabinet_distance
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_wrist_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1465,7 +1458,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * wrist_cabinet_error)
             error[mask] = wrist_cabinet_error
 
-        return reward, error
+        return reward, error, mask
 
     def _reward_cabinet_dof_goal(self):
         """
@@ -1483,7 +1476,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * cabinet_dof_error)
             error[mask] = cabinet_dof_error
 
-        return reward, error
+        return reward, error, mask
     
     def _reward_big_box_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1507,7 +1500,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[lift_mask] = torch.exp(-4 * big_box_pos_error)
             error[lift_mask] = big_box_pos_error
 
-        return reward, error
+        return reward, error, carry_mask | lift_mask
 
     def _reward_wrist_big_box_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1533,7 +1526,7 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * wrist_big_box_error)
             error[mask] = wrist_big_box_error
 
-        return reward, error
+        return reward, error, mask
     
     def _reward_wrist_ref_wrist_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
@@ -1550,4 +1543,4 @@ class H1UnifiedTask(LeggedRobot):
             reward[mask] = torch.exp(-4 * wrist_pos_error)
             error[mask] = wrist_pos_error
 
-        return reward, error
+        return reward, error, mask

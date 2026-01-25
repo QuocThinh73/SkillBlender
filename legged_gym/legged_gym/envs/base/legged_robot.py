@@ -274,19 +274,20 @@ class LeggedRobot(BaseTask):
             name = self.reward_names[i]
             rew_func_return = self.reward_functions[i]()
             if isinstance(rew_func_return, tuple):
-                unscaled_rew, metric = rew_func_return
-                self.episode_metrics[name] = metric.mean().item()
+                unscaled_rew, metric, mask = rew_func_return
+                self.episode_metrics[name] = metric[mask].mean().item()
             else:
                 unscaled_rew = rew_func_return
             rew = unscaled_rew * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
+
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
+            
         # add termination reward after clipping
         if "termination" in self.reward_scales:
-            rew = self._reward_termination(
-            ) * self.reward_scales["termination"]
+            rew = self._reward_termination() * self.reward_scales["termination"]
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
 
