@@ -959,40 +959,44 @@ class H1UnifiedTask(LeggedRobot):
         self.cabinet_root_states[active_ids, 7:13] = 0.0
 
     def step(self, actions):
-        if self.cfg.env.use_ref_actions:
-            actions += self.ref_action
-        # dynamic randomization
-        # delay = torch.rand((self.num_envs, 1), device=self.device)
-        delay = torch.rand((self.num_envs, 1), device=self.device)
-        actions = (1 - delay) * actions.to(self.device) + delay * self.actions
-        actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
-        
-        # changed version of super().step()
-        clip_actions = self.cfg.normalization.clip_actions
-        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
-        # step physics and render each frame
-        self.render()
-        for _ in range(self.cfg.control.decimation):
-            self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
-            cabinet_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
-            full_force_buffer = torch.cat((self.torques, cabinet_force_buffer), dim=1) # [num_envs, num_dofs + cabinet_num_dofs]
-            humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
-            self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
-                                                            gymtorch.unwrap_tensor(full_force_buffer),
-                                                            gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
+        with torch.no_grad():
+            actions = actions.to(self.device)
+            actions = actions.detach()
 
-            self.gym.simulate(self.sim)
-            if self.device == 'cpu':
-                self.gym.fetch_results(self.sim, True)
-            self.gym.refresh_dof_state_tensor(self.sim)
-        self.post_physics_step()
+            if self.cfg.env.use_ref_actions:
+                actions += self.ref_action
+            # dynamic randomization
+            # delay = torch.rand((self.num_envs, 1), device=self.device)
+            delay = torch.rand((self.num_envs, 1), device=self.device)
+            actions = (1 - delay) * actions.to(self.device) + delay * self.actions
+            actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
+            
+            # changed version of super().step()
+            clip_actions = self.cfg.normalization.clip_actions
+            self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+            # step physics and render each frame
+            self.render()
+            for _ in range(self.cfg.control.decimation):
+                self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
+                cabinet_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
+                full_force_buffer = torch.cat((self.torques, cabinet_force_buffer), dim=1) # [num_envs, num_dofs + cabinet_num_dofs]
+                humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
+                self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
+                                                                gymtorch.unwrap_tensor(full_force_buffer),
+                                                                gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
 
-        # return clipped obs, clipped states (None), rewards, dones and infos
-        clip_obs = self.cfg.normalization.clip_observations
-        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
-        if self.privileged_obs_buf is not None:
-            self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
-        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
+                self.gym.simulate(self.sim)
+                if self.device == 'cpu':
+                    self.gym.fetch_results(self.sim, True)
+                self.gym.refresh_dof_state_tensor(self.sim)
+            self.post_physics_step()
+
+            # return clipped obs, clipped states (None), rewards, dones and infos
+            clip_obs = self.cfg.normalization.clip_observations
+            self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+            if self.privileged_obs_buf is not None:
+                self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+            return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def post_physics_step(self):
         """ check terminations, compute observations and rewards

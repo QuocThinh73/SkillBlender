@@ -26,7 +26,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
 
     class env(LeggedRobotCfg.env):
         # change the observation dim
-        num_tasks = 3
+        num_tasks = 8
         num_actions = 19
         frame_stack = 1
         c_frame_stack = 3
@@ -37,7 +37,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 16
+        num_envs = 1024
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
@@ -261,17 +261,17 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
 
         class scales:
-            # torso_ori_ball_distance = 1
-            # ball_goal_distance = 5
-            # small_box_goal_distance = 5
-            # wrist_small_box_distance = 5
+            torso_ori_ball_distance = 1
+            ball_goal_distance = 5
+            small_box_goal_distance = 5
+            wrist_small_box_distance = 5
             wrist_button_distance = 5
             right_arm_default = 0.5
             torso_cabinet_distance = 5
             wrist_cabinet_distance = 5
             cabinet_dof_goal = 5
-            # big_box_goal_distance = 5
-            # wrist_big_box_distance = 5
+            big_box_goal_distance = 5
+            wrist_big_box_distance = 5
             wrist_ref_wrist_distance = 5
 
     class sensor(LeggedRobotCfg.sensor):
