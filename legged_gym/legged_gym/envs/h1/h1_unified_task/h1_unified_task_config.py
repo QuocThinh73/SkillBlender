@@ -3,23 +3,23 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
     class task():
-        # TASK_BALL = 0
-        # TASK_BOX = 1
-        # TASK_BUTTON = 2
-        # TASK_CABINET = 3
-        # TASK_CARRY = 4
-        # TASK_LIFT = 5
-        # TASK_REACH = 6
-        # TASK_TRANSFER = 7
-
-        TASK_BUTTON = 0
-        TASK_CABINET = 1
-        TASK_REACH = 2
-        TASK_BALL = 3
-        TASK_BOX = 4
-        TASK_CARRY = 5
-        TASK_LIFT = 6
+        TASK_BALL = 0
+        TASK_BOX = 1
+        TASK_BUTTON = 2
+        TASK_CABINET = 3
+        TASK_CARRY = 4
+        TASK_LIFT = 5
+        TASK_REACH = 6
         TASK_TRANSFER = 7
+
+        # TASK_BUTTON = 0
+        # TASK_CABINET = 1
+        # TASK_REACH = 2
+        # TASK_BALL = 3
+        # TASK_BOX = 4
+        # TASK_CARRY = 5
+        # TASK_LIFT = 6
+        # TASK_TRANSFER = 7
 
     class human(LeggedRobotCfg.human):
         freq = 1
@@ -37,7 +37,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 1024
+        num_envs = 4096
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0

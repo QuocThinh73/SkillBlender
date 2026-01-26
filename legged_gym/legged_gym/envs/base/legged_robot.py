@@ -242,9 +242,10 @@ class LeggedRobot(BaseTask):
         # fill extras
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
+            mask = self.episode_masks[key]
             self.extras["episode"]['rew_' + key] = torch.mean(
-                self.episode_sums[key][env_ids]) / self.max_episode_length_s
-            self.episode_sums[key][env_ids] = 0.
+                self.episode_sums[key][mask]) / self.max_episode_length_s
+            self.episode_sums[key][mask] = 0.
         # log metrics
         self.extras["episode_metrics"] = deepcopy(self.episode_metrics)
         # log additional curriculum info
@@ -273,6 +274,7 @@ class LeggedRobot(BaseTask):
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew_func_return = self.reward_functions[i]()
+            mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
             if isinstance(rew_func_return, tuple):
                 unscaled_rew, metric, mask = rew_func_return
                 self.episode_metrics[name] = metric[mask].mean().item()
@@ -281,6 +283,7 @@ class LeggedRobot(BaseTask):
             rew = unscaled_rew * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
+            self.episode_masks[name] = mask
 
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
@@ -690,6 +693,8 @@ class LeggedRobot(BaseTask):
 
         # reward episode sums
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+                             for name in self.reward_scales.keys()}
+        self.episode_masks = {name: torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
         self.episode_metrics = {name: 0 for name in self.reward_scales.keys()}
 
