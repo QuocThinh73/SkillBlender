@@ -213,8 +213,8 @@ class OnPolicyRunner:
                     info.append(ep_metric[key])
                 value = np.mean(info)
                 # wandb.log({'Episode/' + key: value}, step=locs['it'])
-                wandb_dict['Metric/' + key] = value
-                ep_string += f"""{f'Mean episode metric {key}:':>{pad}} {value:.4f}\n"""
+                wandb_dict['Error/' + key] = value
+                ep_string += f"""{f'Mean episode error {key}:':>{pad}} {value:.4f}\n"""
         std = self.alg.actor_critic.std.cpu().detach().numpy()
         mean_std = std.mean()
         entropy = self.alg.actor_critic.entropy.detach().mean().item()
