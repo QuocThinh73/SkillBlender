@@ -148,6 +148,9 @@ from .h1_2.h1_2_task_transfer.h1_2_task_transfer_config import H1_2TaskTransferC
 from .h1_2.h1_2_task_cabinet.h1_2_task_cabinet import H1_2TaskCabinet
 from .h1_2.h1_2_task_cabinet.h1_2_task_cabinet_config import H1_2TaskCabinetCfg, H1_2TaskCabinetCfgPPO
 
+from .h1.h1_multitask.h1_multitask import H1Multitask
+from .h1.h1_multitask.h1_multitask_config import H1MultitaskCfg, H1MultitaskCfgPPO
+
 from legged_gym.utils.task_registry import task_registry
 
 task_registry.register( "h1_walking", H1Walking, H1WalkingCfg(), H1WalkingCfgPPO(), 'h1/h1_walking')
@@ -186,3 +189,4 @@ task_registry.register( "h1_2_task_ball", H1_2TaskBall, H1_2TaskBallCfg(), H1_2T
 task_registry.register( "h1_2_task_carry", H1_2TaskCarry, H1_2TaskCarryCfg(), H1_2TaskCarryCfgPPO(), 'h1_2/h1_2_task_carry')
 task_registry.register( "h1_2_task_transfer", H1_2TaskTransfer, H1_2TaskTransferCfg(), H1_2TaskTransferCfgPPO(), 'h1_2/h1_2_task_transfer')
 task_registry.register( "h1_2_task_cabinet", H1_2TaskCabinet, H1_2TaskCabinetCfg(), H1_2TaskCabinetCfgPPO(), 'h1_2/h1_2_task_cabinet')
+task_registry.register( "h1_multitask", H1Multitask, H1MultitaskCfg(), H1MultitaskCfgPPO(), 'h1/h1_multitask')
