@@ -1239,7 +1239,7 @@ class H1UnifiedTask(LeggedRobot):
             obs_now = obs_buf.clone()
         self.obs_history.append(obs_now)
         self.critic_history.append(self.privileged_obs_buf)
-
+        
 
         obs_buf_all = torch.stack([self.obs_history[i]
                                    for i in range(self.obs_history.maxlen)], dim=1)  # N,T,K
