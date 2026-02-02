@@ -34,11 +34,17 @@ class H1Multitask(LeggedRobot):
         asset_file = os.path.basename(asset_path)
         asset_options = gymapi.AssetOptions()
         
-        robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
-        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
+        humanoid_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        self.num_dof = self.gym.get_asset_dof_count(humanoid_asset)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(humanoid_asset)
+        dof_props_asset = self.gym.get_asset_dof_properties(humanoid_asset)
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(humanoid_asset)
+
+        # Save names from the asset
+        self.body_names = self.gym.get_asset_rigid_body_names(humanoid_asset)
+        self.dof_names = self.gym.get_asset_dof_names(humanoid_asset)
+        feet_names = [s for s in self.body_names if self.cfg.asset.foot_name in s]
+        knee_names = [s for s in self.body_names if self.cfg.asset.knee_name in s]
 
         termination_contact_names = []
         for name in self.cfg.asset.terminate_after_contacts_on:
@@ -50,19 +56,68 @@ class H1Multitask(LeggedRobot):
         self.envs = []
         self.actor_handles = []
         self.humanoid_idxs = []
-        start_pose = gymapi.Transform()
+        humanoid_pose = gymapi.Transform()
+        humanoid_base_init_state_list = self.cfg.init_state.pos + self.cfg.init_state.rot + self.cfg.init_state.lin_vel + self.cfg.init_state.ang_vel
+        self.humanoid_base_init_state = to_torch(humanoid_base_init_state_list, device=self.device, requires_grad=False)
+
+        # Assets
+        ## Task ball
+        ### Ball wall assets
+        goal_assets = []
+        goal_pose = gymapi.Transform()
+        for goal_dim in self.cfg.asset.goal_dims:
+            goal_dims = gymapi.Vec3(*goal_dim)
+
+            asset_options = gymapi.AssetOptions()
+            asset_options.fix_base_link = True
+            asset_options.disable_gravity = True
+
+            goal_asset = self.gym.create_box(
+                self.sim,
+                goal_dims.x, goal_dims.y, goal_dims.z,
+                asset_options
+            )
+            goal_assets.append(goal_asset)
+        ### Ball assets
+        ball_size = self.cfg.asset.ball_size
+        asset_options = gymapi.AssetOptions()
+        ball_asset = self.gym.create_sphere(self.sim, ball_size, asset_options)
+        ball_pose = gymapi.Transform()
+        self.ball_idxs = []
+        ## Task button
+        ### Wall assets
+        wall_dims = gymapi.Vec3(*self.cfg.asset.wall_dims)
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+        wall_asset = self.gym.create_box(self.sim, wall_dims.x, wall_dims.y, wall_dims.z, asset_options)
+        wall_pose = gymapi.Transform()
+        ## Task box
+        ### Table assets
+        table_dims = gymapi.Vec3(*self.cfg.asset.table_dims)
+        asset_options = gymapi.AssetOptions()
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+        table_asset = self.gym.create_box(self.sim, table_dims.x, table_dims.y, table_dims.z, asset_options)
+        table_pose = gymapi.Transform()
+        ### Small box assets
+        small_box_size = self.cfg.asset.small_box_size
+        asset_options = gymapi.AssetOptions()
+        small_box_asset = self.gym.create_box(self.sim, small_box_size, small_box_size, small_box_size, asset_options)
+        small_box_pose = gymapi.Transform()
+        self.small_box_idxs = []
 
         for i in range(self.num_envs):
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
             self.envs.append(env_handle)
 
             pos = self.env_origins[i].clone()
-            start_pose.p = gymapi.Vec3(pos[0], pos[1], pos[2])
+            humanoid_pose.p = gymapi.Vec3(pos[0].item(), pos[1].item(), pos[2].item())
 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
+            self.gym.set_asset_rigid_shape_properties(humanoid_asset, rigid_shape_props)
 
-            actor_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, "h1", i, 0, 0)
+            actor_handle = self.gym.create_actor(env_handle, humanoid_asset, humanoid_pose, "h1", i, 0, 0)
             self.actor_handles.append(actor_handle)
 
             dof_props = self._process_dof_props(dof_props_asset, i)
@@ -73,9 +128,49 @@ class H1Multitask(LeggedRobot):
             self.gym.set_actor_rigid_body_properties(env_handle, actor_handle, body_props, recomputeInertia=True)
 
             self.humanoid_idxs.append(self.gym.get_actor_index(env_handle, actor_handle, gymapi.DOMAIN_SIM))
+
+            # Assets
+            ## Task ball
+            ### Goal assets
+            for goal_i, goal_asset in enumerate(goal_assets):
+                offsets = self.cfg.asset.goal_offsets[goal_i]
+                goal_pose.p = gymapi.Vec3(pos[0].item() + offsets[0], pos[1].item() + offsets[1], pos[2].item() + offsets[2])
+                self.gym.create_actor(env_handle, goal_asset, goal_pose, f"goal_{goal_i}", i, 0)
+            ### Ball assets
+            ball_pose.p.x = pos[0].item() + 2
+            ball_pose.p.y = pos[1].item()
+            ball_pose.p.z = pos[2].item() + 0.5 * ball_size
+            ball_handle = self.gym.create_actor(env_handle, ball_asset, ball_pose, "ball", i, 0)
+            self.ball_idxs.append(self.gym.get_actor_index(env_handle, ball_handle, gymapi.DOMAIN_SIM))
+            ## Task button
+            ### Wall assets
+            wall_offsets = self.cfg.asset.wall_offsets
+            wall_pose.p = gymapi.Vec3(pos[0] + wall_offsets[0], pos[1] + wall_offsets[1], pos[2] + wall_offsets[2])
+            self.gym.create_actor(env_handle, wall_asset, wall_pose, "wall", i, 0)
+            ## Task box
+            ### Table assets
+            table_offsets = self.cfg.asset.table_offsets
+            table_pose.p = gymapi.Vec3(pos[0] + table_offsets[0], pos[1] + table_offsets[1], pos[2] + table_offsets[2])
+            self.gym.create_actor(env_handle, table_asset, table_pose, "table", i, 0)
+            ### Small box assets
+            small_box_pose.p.x = table_pose.p.x
+            small_box_pose.p.y = table_pose.p.y
+            small_box_pose.p.z = table_pose.p.z
+            small_box_handle = self.gym.create_actor(env_handle, small_box_asset, small_box_pose, "small_box", i, 0)
+            self.small_box_idxs.append(self.gym.get_actor_index(env_handle, small_box_handle, gymapi.DOMAIN_SIM))
         
         self.humanoid_idxs = torch.tensor(self.humanoid_idxs, device=self.device, dtype=torch.long)
+        self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device, dtype=torch.long)
+        self.small_box_idxs = torch.tensor(self.small_box_idxs, device=self.device, dtype=torch.long)
             
+        # Common body parts
+        self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(feet_names)):
+            self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
+        self.knee_indices = torch.zeros(len(knee_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(knee_names)):
+            self.knee_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], knee_names[i])
+
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
@@ -96,14 +191,19 @@ class H1Multitask(LeggedRobot):
 
         # Create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
-        self.humanoid_root_states = self.root_states.view(self.num_envs, -1, 13)[:, 0, :]
-        self.base_quat = self.humanoid_root_states[:, 3:7]
-        self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 1]
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3)
         self.rigid_state = gymtorch.wrap_tensor(rigid_body_state).view(self.num_envs, -1, 13)
+
+        self.humanoid_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.humanoid_idxs[0]]
+        self.ball_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.ball_idxs[0]]
+        self.small_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.small_box_idxs[0]]
+
+        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 0]
+        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 1]
+
+        self.base_quat = self.humanoid_root_states[:, 3:7]
+        self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
 
         self.common_step_counter = 0
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
@@ -118,12 +218,95 @@ class H1Multitask(LeggedRobot):
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
         self.last_root_vel = torch.zeros_like(self.humanoid_root_states[:, 7:13])
         self.commands = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
+        self.commands_scale = torch.tensor([self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel], device=self.device, requires_grad=False,)
+        self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.humanoid_root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.humanoid_root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        self.measured_heights = 0
 
         # Joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
 
+    def _reset_dofs(self, env_ids):
+        self.dof_pos[env_ids] = self.default_dof_pos + torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dof), device=self.device)
+        self.dof_vel[env_ids] = 0.
+
+        humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
+        self.gym.set_dof_state_tensor_indexed(self.sim,
+                                              gymtorch.unwrap_tensor(self.dof_state),
+                                              gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
+
+    def _reset_root_states(self, env_ids):
+        if len(env_ids) == 0:
+            return
+
+        # Reset humanoid root states
+        self.humanoid_root_states[env_ids] = self.humanoid_base_init_state
+        self.humanoid_root_states[env_ids, :3] += self.env_origins[env_ids]
+        # Reset ball root states
+        self.ball_root_states[env_ids, :3] = self.env_origins[env_ids]
+        self.ball_root_states[env_ids, 0] += 2.0
+        self.ball_root_states[env_ids, 1] += 0.0
+        self.ball_root_states[env_ids, 2] += 0.5 * self.cfg.asset.ball_size
+        # Reset small box root states
+        self.small_box_root_states[env_ids, :3] = self.env_origins[env_ids]
+        self.small_box_root_states[env_ids, 0] += self.cfg.asset.table_offsets[0]
+        self.small_box_root_states[env_ids, 1] += self.cfg.asset.table_offsets[1]
+        self.small_box_root_states[env_ids, 2] += self.cfg.asset.table_offsets[2]
+        
+        humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
+        ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
+        small_box_ids_int32 = self.small_box_idxs[env_ids].to(torch.int32)
+
+        ids = torch.cat(
+            [
+                humanoid_ids_int32,
+                ball_ids_int32,
+                small_box_ids_int32
+            ]
+        )
+
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim,
+            gymtorch.unwrap_tensor(self.root_states),
+            gymtorch.unwrap_tensor(ids), 
+            len(ids)
+        )
+
+    def reset_idx(self, env_ids):
+        super().reset_idx(env_ids)
+
     def compute_observations(self):
         pass
+
+    def post_physics_step(self):
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+
+        self.episode_length_buf += 1
+        self.common_step_counter += 1
+
+        # prepare quantities
+        self.base_quat[:] = self.humanoid_root_states[:, 3:7]
+        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.humanoid_root_states[:, 7:10])
+        self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.humanoid_root_states[:, 10:13])
+        self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
+
+        self._post_physics_step_callback()
+
+        # compute observations, rewards, resets, ...
+        self.check_termination()
+        self.compute_reward()
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset_idx(env_ids)
+        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
+
+        self.last_last_actions[:] = torch.clone(self.last_actions[:])
+        self.last_actions[:] = self.actions[:]
+        self.last_dof_vel[:] = self.dof_vel[:]
+        self.last_root_vel[:] = self.humanoid_root_states[:, 7:13]
+        self.last_rigid_state[:] = self.rigid_state[:]
