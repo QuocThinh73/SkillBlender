@@ -106,6 +106,28 @@ class H1Multitask(LeggedRobot):
         small_box_asset = self.gym.create_box(self.sim, small_box_size, small_box_size, small_box_size, asset_options)
         small_box_pose = gymapi.Transform()
         self.small_box_idxs = []
+        ## Task cabinet
+        ### Cabinet assets
+        asset_options = gymapi.AssetOptions()
+        asset_options.use_mesh_materials = True
+        asset_options.mesh_normal_mode = gymapi.COMPUTE_PER_VERTEX
+        asset_options.override_inertia = True
+        asset_options.override_com = True
+        asset_options.fix_base_link = True
+        asset_options.disable_gravity = True
+        cabinet_asset = self.gym.load_asset(self.sim, self.cfg.asset.gapartnet_root, f"{self.cfg.asset.gapartnet_id}/mobility_annotation_gapartnet.urdf", asset_options)
+        self.cabinet_num_dofs = self.gym.get_asset_dof_count(cabinet_asset)
+        cabinet_dof_props = self.gym.get_asset_dof_properties(cabinet_asset)
+        cabinet_default_dof_pos = np.zeros(self.cabinet_num_dofs, dtype=np.float32)
+        cabinet_default_dof_pos[:] = self.cfg.asset.cabinet_dof_default
+        cabinet_default_dof_state = np.zeros(self.cabinet_num_dofs, gymapi.DofState.dtype)
+        cabinet_default_dof_state["pos"] = cabinet_default_dof_pos
+        cabinet_dof_props["driveMode"].fill(gymapi.DOF_MODE_NONE) # NO DOF_MODE_POS
+        cabinet_dof_props["stiffness"].fill(0.0) # how fast the arti obj gonna move
+        cabinet_dof_props["damping"].fill(5.0) # large damping to prevent oscillation
+        cabinet_dof_props["friction"].fill(0.0)
+        cabinet_pose = gymapi.Transform()
+        self.cabinet_idxs = []
 
         for i in range(self.num_envs):
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
@@ -158,10 +180,21 @@ class H1Multitask(LeggedRobot):
             small_box_pose.p.z = table_pose.p.z
             small_box_handle = self.gym.create_actor(env_handle, small_box_asset, small_box_pose, "small_box", i, 0)
             self.small_box_idxs.append(self.gym.get_actor_index(env_handle, small_box_handle, gymapi.DOMAIN_SIM))
+            ## Task cabinet
+            ### Cabinet assets
+            cabinet_offsets = self.cfg.asset.cabinet_offsets
+            cabinet_pose.p = gymapi.Vec3(pos[0] + cabinet_offsets[0], pos[1] + cabinet_offsets[1], pos[2] + cabinet_offsets[2])
+            cabinet_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), -np.pi / 2)
+            cabinet_handle = self.gym.create_actor(env_handle, cabinet_asset, cabinet_pose, "cabinet", i, 0)
+            self.gym.set_actor_dof_properties(env_handle, cabinet_handle, cabinet_dof_props)
+            self.gym.set_actor_dof_states(env_handle, cabinet_handle, cabinet_default_dof_state, gymapi.STATE_ALL)
+            self.gym.set_actor_scale(env_handle, cabinet_handle, self.cfg.asset.cabinet_scale)
+            self.cabinet_idxs.append(self.gym.get_actor_index(env_handle, cabinet_handle, gymapi.DOMAIN_SIM))
         
         self.humanoid_idxs = torch.tensor(self.humanoid_idxs, device=self.device, dtype=torch.long)
         self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device, dtype=torch.long)
         self.small_box_idxs = torch.tensor(self.small_box_idxs, device=self.device, dtype=torch.long)
+        self.cabinet_idxs = torch.tensor(self.cabinet_idxs, device=self.device, dtype=torch.long)
             
         # Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
@@ -198,9 +231,12 @@ class H1Multitask(LeggedRobot):
         self.humanoid_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.humanoid_idxs[0]]
         self.ball_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.ball_idxs[0]]
         self.small_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.small_box_idxs[0]]
+        self.cabinet_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.cabinet_idxs[0]]
+        self.humanoid_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_dof]
+        self.cabinet_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_dof:]
 
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 1]
+        self.dof_pos = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 0]
+        self.dof_vel = self.humanoid_dof_state.view(self.num_envs, self.num_dof, 2)[:, :, 1]
 
         self.base_quat = self.humanoid_root_states[:, 3:7]
         self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
@@ -230,13 +266,25 @@ class H1Multitask(LeggedRobot):
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
 
     def _reset_dofs(self, env_ids):
+        # Reset humanoid dof states
         self.dof_pos[env_ids] = self.default_dof_pos + torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dof), device=self.device)
-        self.dof_vel[env_ids] = 0.
+        self.dof_vel[env_ids] = 0.0
+        # Reset cabinet dof states
+        self.cabinet_dof_state[env_ids, :, 0] = self.cfg.asset.cabinet_dof_default
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(dtype=torch.int32)
+        cabinet_ids_int32 = self.cabinet_idxs[env_ids].to(dtype=torch.int32)
+
+        ids = torch.cat(
+            [
+                humanoid_ids_int32,
+                cabinet_ids_int32
+            ]
+        )
+
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
-                                              gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
+                                              gymtorch.unwrap_tensor(ids), len(ids))
 
     def _reset_root_states(self, env_ids):
         if len(env_ids) == 0:
@@ -255,7 +303,7 @@ class H1Multitask(LeggedRobot):
         self.small_box_root_states[env_ids, 0] += self.cfg.asset.table_offsets[0]
         self.small_box_root_states[env_ids, 1] += self.cfg.asset.table_offsets[1]
         self.small_box_root_states[env_ids, 2] += self.cfg.asset.table_offsets[2]
-        
+
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
         ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
         small_box_ids_int32 = self.small_box_idxs[env_ids].to(torch.int32)
@@ -280,6 +328,40 @@ class H1Multitask(LeggedRobot):
 
     def compute_observations(self):
         pass
+
+    def step(self, actions):
+        with torch.no_grad():
+            # dynamic randomization
+            delay = torch.rand((self.num_envs, 1), device=self.device)
+            actions = (1 - delay) * actions.to(self.device) + delay * self.actions
+            actions += self.cfg.domain_rand.dynamic_randomization * torch.randn_like(actions) * actions
+            
+            # changed version of super().step()
+            clip_actions = self.cfg.normalization.clip_actions
+            self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+            # step physics and render each frame
+            self.render()
+            for _ in range(self.cfg.control.decimation):
+                self.torques = self._compute_torques(self.actions).view(self.torques.shape) # [num_envs, num_actions]
+                cabinet_force_buffer = torch.zeros((self.num_envs, self.cabinet_num_dofs), device=self.device)
+                full_force_buffer = torch.cat((self.torques, cabinet_force_buffer), dim=1) # [num_envs, num_dofs + arti_obj_num_dofs]
+                humanoid_ids_int32 = self.humanoid_idxs.to(dtype=torch.int32)
+                self.gym.set_dof_actuation_force_tensor_indexed(self.sim, 
+                                                                gymtorch.unwrap_tensor(full_force_buffer),
+                                                                gymtorch.unwrap_tensor(humanoid_ids_int32), len(humanoid_ids_int32))
+
+                self.gym.simulate(self.sim)
+                if self.device == 'cpu':
+                    self.gym.fetch_results(self.sim, True)
+                self.gym.refresh_dof_state_tensor(self.sim)
+            self.post_physics_step()
+
+            # return clipped obs, clipped states (None), rewards, dones and infos
+            clip_obs = self.cfg.normalization.clip_observations
+            self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+            if self.privileged_obs_buf is not None:
+                self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+            return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def post_physics_step(self):
         self.gym.refresh_actor_root_state_tensor(self.sim)

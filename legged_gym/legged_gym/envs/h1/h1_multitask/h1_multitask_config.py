@@ -44,6 +44,13 @@ class H1MultitaskCfg(LeggedRobotCfg):
         table_offsets = [0.0, 2.0, 0.975]
         ## Small box assets
         small_box_size = 0.1
+        # Task cabinet
+        ## Cabinet
+        gapartnet_root = "resources/objects/gapartnet/"
+        gapartnet_id = 45159
+        cabinet_offsets = [0, -2.0, 1.0]
+        cabinet_dof_default = 1.0
+        cabinet_scale = 0.5
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
