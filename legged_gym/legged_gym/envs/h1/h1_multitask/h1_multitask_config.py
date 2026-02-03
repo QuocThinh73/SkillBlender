@@ -8,6 +8,22 @@ class H1MultitaskCfg(LeggedRobotCfg):
         num_envs = 4
         env_spacing = 10.0
 
+        # Task
+        num_tasks = 5
+        TASK_REACH = 0
+        TASK_BUTTON = 1
+        TASK_CABINET = 2
+        TASK_BOX = 3
+        TASK_BALL = 4
+
+        # Episode length
+        reach_length_s = 8.0
+        button_length_s = 8.0
+        cabinet_length_s = 8.0
+        box_length_s = 12.0
+        ball_length_s = 12.0
+        episode_length_s = reach_length_s + button_length_s + cabinet_length_s + box_length_s + ball_length_s
+
     class asset(LeggedRobotCfg.asset):
         file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/h1/urdf/h1_wrist.urdf"
 

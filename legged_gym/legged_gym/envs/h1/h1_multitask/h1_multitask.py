@@ -14,6 +14,26 @@ import numpy as np
 class H1Multitask(LeggedRobot):
     def __init__(self, cfg: H1MultitaskCfg, sim_params, physics_engine, sim_device, headless):
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
+        self.cfg = cfg
+
+        self.num_tasks = cfg.env.num_tasks
+        self.TASK_REACH = cfg.env.TASK_REACH
+        self.TASK_BUTTON = cfg.env.TASK_BUTTON
+        self.TASK_CABINET = cfg.env.TASK_CABINET
+        self.TASK_BOX = cfg.env.TASK_BOX
+        self.TASK_BALL = cfg.env.TASK_BALL
+
+        # Goals
+        ## Task reach
+        self.wrist_goal_pos = torch.zeros(self.num_envs, 2, 7, device=self.device)
+        ## Task button
+        self.button_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        ## Task cabinet
+        self.cabinet_dof_goal = 0
+        ## Task box
+        self.small_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        ## Task ball
+        self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
     def _push_robots(self):
         pass
@@ -162,6 +182,7 @@ class H1Multitask(LeggedRobot):
             ball_pose.p.x = pos[0].item() + 2
             ball_pose.p.y = pos[1].item()
             ball_pose.p.z = pos[2].item() + 0.5 * ball_size
+            ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi))
             ball_handle = self.gym.create_actor(env_handle, ball_asset, ball_pose, "ball", i, 0)
             self.ball_idxs.append(self.gym.get_actor_index(env_handle, ball_handle, gymapi.DOMAIN_SIM))
             ## Task button
@@ -207,6 +228,23 @@ class H1Multitask(LeggedRobot):
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
+
+        ### Other body parts
+        #### Elbow
+        elbow_names = [s for s in self.body_names if self.cfg.asset.elbow_name in s]
+        self.elbow_indices = torch.zeros(len(elbow_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(elbow_names)):
+            self.elbow_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], elbow_names[i])
+        #### Torso 
+        torso_names = [s for s in self.body_names if self.cfg.asset.torso_name in s]
+        self.torso_indices = torch.zeros(len(torso_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(torso_names)):
+            self.torso_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], torso_names[i])
+        #### Wrist
+        wrist_names = [s for s in self.body_names if self.cfg.asset.wrist_name in s]
+        self.wrist_indices = torch.zeros(len(wrist_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(wrist_names)):
+            self.wrist_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], wrist_names[i])
 
     def _init_buffers(self):
         self._init_visual_buffers()
@@ -327,7 +365,62 @@ class H1Multitask(LeggedRobot):
         super().reset_idx(env_ids)
 
     def compute_observations(self):
-        pass
+        # Proprioception observations
+        q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
+        dq = self.dof_vel * self.obs_scales.dof_vel
+
+        proprioception_obs_buf = torch.cat((
+            q,                                              # |num_actions|
+            dq,                                             # |num_actions|
+            self.actions,                                   # |num_actions|
+            self.base_lin_vel * self.obs_scales.lin_vel,    # 3
+            self.base_ang_vel * self.obs_scales.ang_vel,    # 3
+            self.base_euler_xyz * self.obs_scales.quat,     # 3
+        ), dim=-1)
+
+        # Task relevant observations (object, goal)
+        humanoid_wrist = self.rigid_state[:, self.wrist_indices, :7]
+        humanoid_wrist_pos = humanoid_wrist[:, :, :3]
+        ## Task reach
+        wrist_goal_pos = self.wrist_goal_pos
+        wrist_goal_pos_dist_obs = torch.flatten(humanoid_wrist_pos - wrist_goal_pos, start_dim=1)
+        ## Task button
+        humanoid_left_wrist_pos = humanoid_wrist[:, 0, :3]
+        button_goal_pos = self.button_goal_pos
+        wrist_button_dist_obs = humanoid_left_wrist_pos - button_goal_pos
+        ## Task cabinet
+        cabinet_pos = self.cabinet_root_states[:, :3]
+        cabinet_dof_pos = self.cabinet_dof_state[:, :, 0]
+        cabinet_dof_goal = self.cabinet_dof_goal
+        wrist_cabinet_dist_obs = torch.flatten(humanoid_wrist_pos - cabinet_pos.unsqueeze(1), start_dim=1)
+        cabinet_dof_pos_goal_dist_obs = cabinet_dof_pos - cabinet_dof_goal
+        ## Task box
+        small_box_pos = self.small_box_root_states[:, :3]
+        wrist_small_box_dist_obs = torch.flatten(humanoid_wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
+        small_box_goal_dist_obs = small_box_pos - self.small_box_goal_pos
+        ## Task ball
+        humanoid_torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
+        ball_pos = self.ball_root_states[:, :3]
+        torso_ball_dist_obs = humanoid_torso_pos - ball_pos
+        ball_goal_dist_obs = ball_pos - self.ball_goal_pos
+
+        task_obs_buf = torch.cat((
+            ## Task reach
+            wrist_goal_pos_dist_obs,                # 14
+            ## Task button
+            wrist_button_dist_obs,                  # 3
+            ## Task cabinet
+            wrist_cabinet_dist_obs,                 # 6
+            cabinet_dof_pos_goal_dist_obs,          # 2
+            ## Task box
+            wrist_small_box_dist_obs,               # 6
+            small_box_goal_dist_obs,                # 3
+            ## Task ball
+            torso_ball_dist_obs,                    # 3
+            ball_goal_dist_obs,                     # 3
+        ), dim=-1)
+
+        # Phase observations
 
     def step(self, actions):
         with torch.no_grad():
@@ -392,3 +485,5 @@ class H1Multitask(LeggedRobot):
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.humanoid_root_states[:, 7:13]
         self.last_rigid_state[:] = self.rigid_state[:]
+
+# ================================================ Rewards ================================================== #
