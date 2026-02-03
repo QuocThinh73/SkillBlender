@@ -7,8 +7,10 @@ from isaacgym import gymapi, gymtorch
 import torch
 from legged_gym.envs.base.legged_robot import LeggedRobot, LEGGED_GYM_ROOT_DIR, get_euler_xyz_tensor, quat_rotate_inverse
 
+import random
 import os
 import numpy as np
+from collections import deque
 
 
 class H1Multitask(LeggedRobot):
@@ -56,6 +58,12 @@ class H1Multitask(LeggedRobot):
         self.switch_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.task_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.max_task_length = self.chain_max_task_length[self.task_ptr].clone()
+
+        # Precompute
+        self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
+        self.gym.simulate(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        self.compute_observations()
 
     def _push_robots(self):
         max_vel = self.cfg.domain_rand.max_push_vel_xy
@@ -222,6 +230,9 @@ class H1Multitask(LeggedRobot):
             ball_pose.p.z = pos[2].item() + 0.5 * ball_size
             ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi))
             ball_handle = self.gym.create_actor(env_handle, ball_asset, ball_pose, "ball", i, 0)
+            ball_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, ball_handle)
+            for prop in ball_rigid_body_props:
+                prop.mass = random.uniform(*self.cfg.asset.ball_range_mass)
             self.ball_idxs.append(self.gym.get_actor_index(env_handle, ball_handle, gymapi.DOMAIN_SIM))
             ## Task button
             ### Wall assets
@@ -362,6 +373,14 @@ class H1Multitask(LeggedRobot):
         self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
 
         self.default_joint_pd_target = self.default_dof_pos.clone()
+        self.obs_history = deque(maxlen=self.cfg.env.frame_stack)
+        self.critic_history = deque(maxlen=self.cfg.env.c_frame_stack)
+        for _ in range(self.cfg.env.frame_stack):
+            self.obs_history.append(torch.zeros(
+                self.num_envs, self.cfg.env.num_single_obs, dtype=torch.float, device=self.device))
+        for _ in range(self.cfg.env.c_frame_stack):
+            self.critic_history.append(torch.zeros(
+                self.num_envs, self.cfg.env.num_single_privileged_obs, dtype=torch.float, device=self.device))
 
     def _reset_dofs(self, env_ids):
         # Reset humanoid dof states
@@ -385,19 +404,20 @@ class H1Multitask(LeggedRobot):
                                               gymtorch.unwrap_tensor(ids), len(ids))
 
     def _reset_root_states(self, env_ids):
+        pos = self.env_origins[env_ids].clone()
         # Reset humanoid root states
         self.humanoid_root_states[env_ids] = self.humanoid_base_init_state
         self.humanoid_root_states[env_ids, :3] += self.env_origins[env_ids]
         # Reset ball root states
-        self.ball_root_states[env_ids, :3] = self.env_origins[env_ids]
-        self.ball_root_states[env_ids, 0] += 2.0
-        self.ball_root_states[env_ids, 1] += 0.0
-        self.ball_root_states[env_ids, 2] += 0.5 * self.cfg.asset.ball_size
+        self.ball_root_states[env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
+        self.ball_root_states[env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
+        self.ball_root_states[env_ids, 2] = 0.5 * self.cfg.asset.ball_size
+        self.ball_root_states[env_ids, 3] = 1
+        self.ball_root_states[env_ids, 4:] = 0
         # Reset small box root states
-        self.small_box_root_states[env_ids, :3] = self.env_origins[env_ids]
-        self.small_box_root_states[env_ids, 0] += self.cfg.asset.table_offsets[0]
-        self.small_box_root_states[env_ids, 1] += self.cfg.asset.table_offsets[1]
-        self.small_box_root_states[env_ids, 2] += self.cfg.asset.table_offsets[2] + 0.5 * self.cfg.asset.small_box_size
+        self.small_box_root_states[env_ids, 0] = pos[:, 0]  + self.cfg.asset.table_offsets[0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.small_box_range_x).to(self.device)
+        self.small_box_root_states[env_ids, 1] = pos[:, 1]  + self.cfg.asset.table_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.small_box_range_y).to(self.device)
+        self.small_box_root_states[env_ids, 2] = self.cfg.asset.table_offsets[2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.small_box_size
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
         ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
@@ -426,6 +446,11 @@ class H1Multitask(LeggedRobot):
         self.task_length_buf[env_ids] = 0
         self.max_task_length[env_ids] = self.chain_max_task_length[0]
 
+        for i in range(self.obs_history.maxlen):
+            self.obs_history[i][env_ids] *= 0
+        for i in range(self.critic_history.maxlen):
+            self.critic_history[i][env_ids] *= 0
+
     def compute_observations(self):
         # Proprioception observations
         q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
@@ -442,10 +467,9 @@ class H1Multitask(LeggedRobot):
         ), dim=-1)
 
         proprioception_privileged_obs_buf = torch.cat((
-            (self.dof_pos - self.default_joint_pd_target) * \
-            self.obs_scales.dof_pos,                        # |A|
-            self.dof_vel * self.obs_scales.dof_vel,         # |A|
-            self.actions,                                   # |A|
+            q,                                              # |num_actions|
+            dq,                                             # |num_actions|
+            self.actions,                                   # |num_actions|
             self.base_lin_vel * self.obs_scales.lin_vel,    # 3
             self.base_ang_vel * self.obs_scales.ang_vel,    # 3
             self.base_euler_xyz * self.obs_scales.quat,     # 3

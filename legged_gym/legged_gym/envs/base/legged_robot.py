@@ -99,14 +99,12 @@ class LeggedRobot(BaseTask):
         noise_level = self.cfg.noise.noise_level
         num_dof = self.cfg.env.num_actions
         
-        noise_vec[-3:] = noise_scales.quat * noise_level * self.obs_scales.quat # base euler xyz
-        noise_vec[-6:-3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel # base ang vel (omega)
-        noise_vec[-6-num_dof:-6] = 0. # previous actions
-        noise_vec[-6-2*num_dof:-6-num_dof] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel # dof vel (dq)
-        noise_vec[-6-3*num_dof:-6-2*self.num_dof] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos # dof pos (q)
-        noise_vec[:-6-3*num_dof] = 0. # command
+        noise_vec[3*num_dof+6:3*num_dof+9] = noise_scales.quat * noise_level * self.obs_scales.quat # base euler xyz
+        noise_vec[3*num_dof+3:3*num_dof+6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel # base ang vel (omega)
+        noise_vec[3*num_dof:3*num_dof+3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel # base lin vel
+        noise_vec[num_dof:2*num_dof] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel # dof vel (dq)
+        noise_vec[0:num_dof] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos # dof pos (q)
         
-        assert -6-3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
         return noise_vec
 
     def step(self, actions):

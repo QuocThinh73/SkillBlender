@@ -14,14 +14,18 @@ class H1MultitaskCfg(LeggedRobotCfg):
         num_actions = 19
         frame_stack = 1
         c_frame_stack = 3
-        command_dim = 9
         num_proprioception_obs = 3 * num_actions + 9
         num_task_obs = 32
         num_phase_obs = num_tasks
         num_single_obs = num_proprioception_obs + num_task_obs + num_phase_obs # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
-        num_single_privileged_obs = 3 * num_actions + 39
+        num_proprioception_privileged_obs = 3 * num_actions + 18
+        num_task_privileged_obs = 62
+        num_phase_privileged_obs = num_tasks
+        num_single_privileged_obs = num_proprioception_privileged_obs + num_task_privileged_obs + num_phase_privileged_obs
         num_privileged_obs = int(c_frame_stack * num_single_privileged_obs)
+
+        command_dim = num_task_obs
         
         num_envs = 4
         env_spacing = 10.0
@@ -80,6 +84,9 @@ class H1MultitaskCfg(LeggedRobotCfg):
         ]
         ## Ball assets
         ball_size = 0.2
+        ball_range_x = [2.0, 2.5]
+        ball_range_y = [-0.3, 0.3]
+        ball_range_mass = [0.3, 0.5]
         # Task button
         ## Wall assets
         wall_dims = [0.05, 2.0, 3.0]
@@ -90,6 +97,8 @@ class H1MultitaskCfg(LeggedRobotCfg):
         table_offsets = [0.0, 2.0, 0.975]
         ## Small box assets
         small_box_size = 0.1
+        small_box_range_x = [-0.3, 0.3]
+        small_box_range_y = [-0.45, -0.35]
         # Task cabinet
         ## Cabinet
         gapartnet_root = "resources/objects/gapartnet/"
