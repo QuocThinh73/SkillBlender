@@ -26,7 +26,7 @@ class H1Multitask(LeggedRobot):
 
         # Goals
         ## Task reach
-        self.wrist_goal_pos = torch.zeros(self.num_envs, 2, 7, device=self.device)
+        self.wrist_goal_pos = torch.zeros(self.num_envs, 2, 3, device=self.device)
         ## Task button
         self.button_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Task cabinet
@@ -58,7 +58,19 @@ class H1Multitask(LeggedRobot):
         self.max_task_length = self.chain_max_task_length[self.task_ptr].clone()
 
     def _push_robots(self):
-        pass
+        max_vel = self.cfg.domain_rand.max_push_vel_xy
+        max_push_angular = self.cfg.domain_rand.max_push_ang_vel
+        self.rand_push_force[:, :2] = torch_rand_float(
+            -max_vel, max_vel, (self.num_envs, 2), device=self.device)  # lin vel x/y
+        self.humanoid_root_states[:, 7:9] = self.rand_push_force[:, :2]
+
+        self.rand_push_torque = torch_rand_float(
+            -max_push_angular, max_push_angular, (self.num_envs, 3), device=self.device)
+
+        self.humanoid_root_states[:, 10:13] = self.rand_push_torque
+
+        self.gym.set_actor_root_state_tensor(
+            self.sim, gymtorch.unwrap_tensor(self.root_states))
 
     def create_sim(self):
         self.up_axis_idx = 2
@@ -85,6 +97,8 @@ class H1Multitask(LeggedRobot):
         # Save names from the asset
         self.body_names = self.gym.get_asset_rigid_body_names(humanoid_asset)
         self.dof_names = self.gym.get_asset_dof_names(humanoid_asset)
+        self.num_bodies = len(self.body_names)
+        self.num_dofs = len(self.dof_names)
         feet_names = [s for s in self.body_names if self.cfg.asset.foot_name in s]
         knee_names = [s for s in self.body_names if self.cfg.asset.knee_name in s]
 
@@ -181,7 +195,7 @@ class H1Multitask(LeggedRobot):
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
             self.gym.set_asset_rigid_shape_properties(humanoid_asset, rigid_shape_props)
 
-            actor_handle = self.gym.create_actor(env_handle, humanoid_asset, humanoid_pose, "h1", i, 0, 0)
+            actor_handle = self.gym.create_actor(env_handle, humanoid_asset, humanoid_pose, self.cfg.asset.name, i, self.cfg.asset.self_collisions)
             self.actor_handles.append(actor_handle)
 
             dof_props = self._process_dof_props(dof_props_asset, i)
@@ -201,7 +215,7 @@ class H1Multitask(LeggedRobot):
                 goal_pose.p = gymapi.Vec3(pos[0].item() + offsets[0], pos[1].item() + offsets[1], pos[2].item() + offsets[2])
                 self.gym.create_actor(env_handle, goal_asset, goal_pose, f"goal_{goal_i}", i, 0)
             ### Ball assets
-            ball_pose.p.x = pos[0].item() + 2
+            ball_pose.p.x = pos[0].item()
             ball_pose.p.y = pos[1].item()
             ball_pose.p.z = pos[2].item() + 0.5 * ball_size
             ball_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi))
@@ -221,6 +235,7 @@ class H1Multitask(LeggedRobot):
             small_box_pose.p.x = table_pose.p.x
             small_box_pose.p.y = table_pose.p.y
             small_box_pose.p.z = table_pose.p.z
+            small_box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi))
             small_box_handle = self.gym.create_actor(env_handle, small_box_asset, small_box_pose, "small_box", i, 0)
             self.small_box_idxs.append(self.gym.get_actor_index(env_handle, small_box_handle, gymapi.DOMAIN_SIM))
             ## Task cabinet
@@ -324,6 +339,26 @@ class H1Multitask(LeggedRobot):
 
         # Joint positions offsets and PD gains
         self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        for i in range(self.num_dofs):
+            name = self.dof_names[i]
+            self.default_dof_pos[i] = self.cfg.init_state.default_joint_angles[name]
+            found = False
+            for dof_name in self.cfg.control.stiffness.keys():
+
+                if dof_name in name:
+                    self.p_gains[:, i] = self.cfg.control.stiffness[dof_name]
+                    self.d_gains[:, i] = self.cfg.control.damping[dof_name]
+                    found = True
+            if not found:
+                self.p_gains[:, i] = 0.
+                self.d_gains[:, i] = 0.
+                print(f"PD gain of joint {name} were not defined, setting them to zero")
+
+        self.rand_push_force = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self.rand_push_torque = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
+
+        self.default_joint_pd_target = self.default_dof_pos.clone()
 
     def _reset_dofs(self, env_ids):
         # Reset humanoid dof states
@@ -403,13 +438,12 @@ class H1Multitask(LeggedRobot):
         ), dim=-1)
 
         # Task relevant observations (object, goal)
-        humanoid_wrist = self.rigid_state[:, self.wrist_indices, :7]
-        humanoid_wrist_pos = humanoid_wrist[:, :, :3]
+        humanoid_wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         ## Task reach
         wrist_goal_pos = self.wrist_goal_pos
-        wrist_goal_pos_dist_obs = torch.flatten(humanoid_wrist - wrist_goal_pos, start_dim=1)
+        wrist_goal_pos_dist_obs = torch.flatten(humanoid_wrist_pos - wrist_goal_pos, start_dim=1)
         ## Task button
-        humanoid_left_wrist_pos = humanoid_wrist[:, 0, :3]
+        humanoid_left_wrist_pos = humanoid_wrist_pos[:, 0]
         button_goal_pos = self.button_goal_pos
         wrist_button_dist_obs = humanoid_left_wrist_pos - button_goal_pos
         ## Task cabinet
@@ -430,7 +464,7 @@ class H1Multitask(LeggedRobot):
 
         task_obs_buf = torch.cat((
             ## Task reach
-            wrist_goal_pos_dist_obs,                # 14
+            wrist_goal_pos_dist_obs,                # 6
             ## Task button
             wrist_button_dist_obs,                  # 3
             ## Task cabinet
@@ -515,10 +549,21 @@ class H1Multitask(LeggedRobot):
         self.last_root_vel[:] = self.humanoid_root_states[:, 7:13]
         self.last_rigid_state[:] = self.rigid_state[:]
 
+    def check_termination(self):
+        self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
+        self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
+        self.reset_buf |= self.time_out_buf
+
+        # if the ball hits the goal, reset the env
+        ball_pos = self.ball_root_states[:, :3]
+        goal_pos = self.ball_goal_pos
+        ball_goal_diff = ball_pos - goal_pos # [envs, 3]
+        ball_goal_dist = torch.norm(ball_goal_diff, dim=1)
+        self.reset_buf |= ball_goal_dist < self.cfg.commands.ranges.threshold
+
     def check_switch(self, env_ids):
         timeout = (self.task_length_buf[env_ids] >= self.max_task_length[env_ids])
-        self.switch_buf[env_ids] |= timeout
-        print(self.switch_buf)
+        self.switch_buf[env_ids] = timeout
 
     def switch_idx(self, env_ids):
         if len(env_ids) == 0:
@@ -532,3 +577,45 @@ class H1Multitask(LeggedRobot):
         self.switch_buf[env_ids] = False
 
 # ================================================ Rewards ================================================== #
+    # Task reach
+    ## Main goal
+    def _reward_wrist_goal_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        wrist_goal_pos = self.wrist_goal_pos
+        wrist_goal_distance = torch.flatten(wrist_pos - wrist_goal_pos, start_dim=1)
+
+    # Task button
+    ## Main goal
+    def _reward_wrist_button_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        button_goal_pos = self.button_goal_pos
+
+    # Task cabinet
+    def _reward_wrist_cabinet_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        cabinet_pos = self.cabinet_root_states[:, :3]
+
+    ## Main goal
+    def _reward_cabinet_goal_distance(self):
+        cabinet_dof_state = self.cabinet_dof_state[:, :, 0]
+        cabinet_dof_state_goal = self.cabinet_dof_goal
+
+    # Task box
+    def _reward_wrist_small_box_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        small_box_pos = self.small_box_root_states[:, :3]
+
+    ## Main goal
+    def _reward_small_box_goal_distance(self):
+        small_box_pos = self.small_box_root_states[:, :3]
+        small_box_goal_pos = self.small_box_goal_pos
+
+    # Task ball
+    def _reward_torso_ball_distance(self):
+        torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
+        ball_pos = self.ball_root_states[:, :3]
+
+    ## Main goal
+    def _reward_ball_goal_distance(self):
+        ball_pos = self.ball_root_states[:, :3]
+        ball_goal_pos = self.ball_goal_pos
