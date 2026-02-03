@@ -385,7 +385,7 @@ class H1TaskBox(LeggedRobot):
                 self.num_envs, self.cfg.env.num_single_obs, dtype=torch.float, device=self.device))
         for _ in range(self.cfg.env.c_frame_stack):
             self.critic_history.append(torch.zeros(
-                self.num_envs, self.cfg.env.single_num_privileged_obs, dtype=torch.float, device=self.device))
+                self.num_envs, self.cfg.env.num_single_privileged_obs, dtype=torch.float, device=self.device))
             
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments

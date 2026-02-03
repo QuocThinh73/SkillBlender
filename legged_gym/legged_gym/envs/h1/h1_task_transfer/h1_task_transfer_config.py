@@ -43,8 +43,8 @@ class H1TaskTransferCfg(LeggedRobotCfg):
         command_dim = 9
         num_single_obs = 3 * num_actions + 6 + command_dim # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
-        single_num_privileged_obs = 3 * num_actions + 39
-        num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
+        num_single_privileged_obs = 3 * num_actions + 39
+        num_privileged_obs = int(c_frame_stack * num_single_privileged_obs)
         
         num_envs = 4096
         episode_length_s = 8  # episode length in seconds

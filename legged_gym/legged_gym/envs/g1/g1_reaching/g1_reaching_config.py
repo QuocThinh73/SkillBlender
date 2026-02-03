@@ -43,8 +43,8 @@ class G1ReachingCfg(LeggedRobotCfg):
         command_dim = 14
         num_single_obs = 3 * num_actions + 6 + command_dim # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
-        single_num_privileged_obs = 3 * num_actions + 60
-        num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
+        num_single_privileged_obs = 3 * num_actions + 60
+        num_privileged_obs = int(c_frame_stack * num_single_privileged_obs)
         
         num_envs = 4096
         episode_length_s = 24  # episode length in seconds

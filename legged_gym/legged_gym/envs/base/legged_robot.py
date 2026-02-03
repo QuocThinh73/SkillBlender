@@ -578,7 +578,7 @@ class LeggedRobot(BaseTask):
                 self.num_envs, self.cfg.env.num_single_obs, dtype=torch.float, device=self.device))
         for _ in range(self.cfg.env.c_frame_stack):
             self.critic_history.append(torch.zeros(
-                self.num_envs, self.cfg.env.single_num_privileged_obs, dtype=torch.float, device=self.device))
+                self.num_envs, self.cfg.env.num_single_privileged_obs, dtype=torch.float, device=self.device))
             
     def _init_visual_buffers(self):
         if self.cfg.sensor.enable_sensor:
