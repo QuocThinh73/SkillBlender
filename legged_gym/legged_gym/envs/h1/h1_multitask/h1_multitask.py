@@ -414,10 +414,33 @@ class H1Multitask(LeggedRobot):
         self.ball_root_states[env_ids, 2] = 0.5 * self.cfg.asset.ball_size
         self.ball_root_states[env_ids, 3] = 1
         self.ball_root_states[env_ids, 4:] = 0
+        # Reset ball goal
+        self.ball_goal_pos[env_ids, 0] = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_x).to(self.device)
+        self.ball_goal_pos[env_ids, 1] = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_y).to(self.device)
+        self.ball_goal_pos[env_ids, 2] = torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.ball_goal_z).to(self.device)
         # Reset small box root states
         self.small_box_root_states[env_ids, 0] = pos[:, 0]  + self.cfg.asset.table_offsets[0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.small_box_range_x).to(self.device)
         self.small_box_root_states[env_ids, 1] = pos[:, 1]  + self.cfg.asset.table_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.small_box_range_y).to(self.device)
         self.small_box_root_states[env_ids, 2] = self.cfg.asset.table_offsets[2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.small_box_size
+        # Reset small box goal
+        self.small_box_goal_pos[env_ids, 2] = self.small_box_root_states[env_ids, 2]
+        self.small_box_goal_pos[env_ids, 0] = self.small_box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_x).to(self.device)
+        self.small_box_goal_pos[env_ids, 1] = self.small_box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_y).to(self.device)
+        # Task button
+        self.button_goal_pos[env_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offsets[0]
+        self.button_goal_pos[env_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_goal_y).to(self.device)
+        self.button_goal_pos[env_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_goal_z).to(self.device)
+        # Task reach
+        center_x = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_x).to(self.device)
+        center_y = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_y).to(self.device)
+        center_z = pos[:, 2] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_z).to(self.device)
+        self.wrist_goal_pos[env_ids, 0, 0] = center_x + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_x).to(self.device)
+        self.wrist_goal_pos[env_ids, 0, 1] = center_y + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_y).to(self.device)
+        self.wrist_goal_pos[env_ids, 0, 2] = center_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_z).to(self.device)
+        self.wrist_goal_pos[env_ids, 1, 0] = center_x + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_x).to(self.device)
+        self.wrist_goal_pos[env_ids, 1, 1] = center_y + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_y).to(self.device)
+        self.wrist_goal_pos[env_ids, 1, 2] = center_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_z).to(self.device)
+
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
         ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)

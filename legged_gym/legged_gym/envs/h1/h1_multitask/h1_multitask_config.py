@@ -91,6 +91,8 @@ class H1MultitaskCfg(LeggedRobotCfg):
         ## Wall assets
         wall_dims = [0.05, 2.0, 3.0]
         wall_offsets = [-1.5, 0.0, 1.5]
+        ## Button assets
+        button_ori_z = 1.0
         # Task box
         ## Table assets
         table_dims = [1.5, 0.9, 0.05]
@@ -204,7 +206,24 @@ class H1MultitaskCfg(LeggedRobotCfg):
             lin_vel_y = [-0, 0]     # min max [m/s]
             ang_vel_yaw = [-0, 0]   # min max [rad/s]
             heading = [-0, 0]
+            # Task ball
+            ball_goal_x = [5.0, 5.0]
+            ball_goal_y = [-2.0, 2.0]
+            ball_goal_z = [0, 0.5]
             threshold = 0.5
+            # Task box
+            small_box_x = [-0.5, 0.5]
+            small_box_y = [0, 0.1]
+            # Task button
+            button_goal_y = [-0.5, 0.5]
+            button_goal_z = [-0.5, 0.5]
+            # Task reach
+            center_goal_x = [-1, 1]
+            center_goal_y = [-1, 1]
+            center_goal_z = [0.75, 1.25]
+            offset_x = [-0.15, 0.15]
+            offset_y = [-0.15, 0.15]
+            offset_z = [-0.1, 0.1]
 
     class rewards:
         only_positive_rewards = True
