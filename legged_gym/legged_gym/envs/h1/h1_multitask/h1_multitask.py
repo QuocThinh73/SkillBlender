@@ -474,6 +474,8 @@ class H1Multitask(LeggedRobot):
         for i in range(self.critic_history.maxlen):
             self.critic_history[i][env_ids] *= 0
 
+        print(self.obs_buf[0])
+
     def compute_observations(self):
         # Proprioception observations
         q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
@@ -685,18 +687,36 @@ class H1Multitask(LeggedRobot):
 
     def check_switch(self, env_ids):
         timeout = (self.task_length_buf[env_ids] >= self.max_task_length[env_ids])
-        self.switch_buf[env_ids] = timeout
+        is_last = (self.task_ptr[env_ids] >= self.num_chain - 1)
+
+        self.switch_buf[env_ids] = timeout & (~is_last)
+
+        self.reset_buf[env_ids] |= timeout & is_last
 
     def switch_idx(self, env_ids):
         if len(env_ids) == 0:
             return
-        
+
         new_task_ptr = self.task_ptr[env_ids] + 1
+
+        is_last = new_task_ptr >= self.num_chain
+        if is_last.any():
+            overflow_env_ids = env_ids[is_last]
+            self.reset_buf[overflow_env_ids] = True
+
+            env_ids = env_ids[~is_last]
+            if len(env_ids) == 0:
+                return
+            
+            new_task_ptr = new_task_ptr[~is_last]
+
         self.task_ptr[env_ids] = new_task_ptr
         self.task_ids[env_ids] = self.task_chain[new_task_ptr]
         self.task_length_buf[env_ids] = 0
         self.max_task_length[env_ids] = self.chain_max_task_length[new_task_ptr]
         self.switch_buf[env_ids] = False
+
+        print(self.obs_buf[0])
 
 # ================================================ Rewards ================================================== #
     # Task reach

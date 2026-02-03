@@ -49,12 +49,12 @@ class H1MultitaskCfg(LeggedRobotCfg):
         wrist_name = "wrist"
 
         terminate_after_contacts_on = [
-            'pelvis',
-            'torso',
-            'waist',
-            'shoulder',
-            'elbow',
-            'knee',
+            # 'pelvis',
+            # 'torso',
+            # 'waist',
+            # 'shoulder',
+            # 'elbow',
+            # 'knee',
         ]
         penalize_contacts_on = [
             # 'hip', 
