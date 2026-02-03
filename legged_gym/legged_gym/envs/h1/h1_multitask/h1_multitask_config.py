@@ -2,12 +2,6 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1MultitaskCfg(LeggedRobotCfg):
     class env(LeggedRobotCfg.env):
-        # Observation
-        num_actions = 19
-        
-        num_envs = 4
-        env_spacing = 10.0
-
         # Task
         num_tasks = 5
         TASK_REACH = 0
@@ -15,6 +9,22 @@ class H1MultitaskCfg(LeggedRobotCfg):
         TASK_CABINET = 2
         TASK_BOX = 3
         TASK_BALL = 4
+
+        # Observation
+        num_actions = 19
+        frame_stack = 1
+        c_frame_stack = 3
+        command_dim = 9
+        num_proprioception_obs = 3 * num_actions + 9
+        num_task_obs = 32
+        num_phase_obs = num_tasks
+        num_single_obs = num_proprioception_obs + num_task_obs + num_phase_obs # see `obs_buf = torch.cat(...)` for details
+        num_observations = int(frame_stack * num_single_obs)
+        num_single_privileged_obs = 3 * num_actions + 39
+        num_privileged_obs = int(c_frame_stack * num_single_privileged_obs)
+        
+        num_envs = 4
+        env_spacing = 10.0
 
         # Episode length
         reach_length_s = 8.0

@@ -106,6 +106,8 @@ class H1Multitask(LeggedRobot):
         for name in self.cfg.asset.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in self.body_names if name in s])
 
+        self.env_frictions = torch.zeros(self.num_envs, 1, dtype=torch.float32, device=self.device)
+        self.body_mass = torch.zeros(self.num_envs, 1, dtype=torch.float32, device=self.device, requires_grad=False)
         self._get_env_origins()
         env_lower = gymapi.Vec3(0., 0., 0.)
         env_upper = gymapi.Vec3(0., 0., 0.)
@@ -234,7 +236,7 @@ class H1Multitask(LeggedRobot):
             ### Small box assets
             small_box_pose.p.x = table_pose.p.x
             small_box_pose.p.y = table_pose.p.y
-            small_box_pose.p.z = table_pose.p.z
+            small_box_pose.p.z = table_pose.p.z + 0.5 * small_box_size
             small_box_pose.r = gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 0, 1), np.random.uniform(-np.pi, np.pi))
             small_box_handle = self.gym.create_actor(env_handle, small_box_asset, small_box_pose, "small_box", i, 0)
             self.small_box_idxs.append(self.gym.get_actor_index(env_handle, small_box_handle, gymapi.DOMAIN_SIM))
@@ -317,6 +319,7 @@ class H1Multitask(LeggedRobot):
         self.base_euler_xyz = get_euler_xyz_tensor(self.base_quat)
 
         self.common_step_counter = 0
+        self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -394,7 +397,7 @@ class H1Multitask(LeggedRobot):
         self.small_box_root_states[env_ids, :3] = self.env_origins[env_ids]
         self.small_box_root_states[env_ids, 0] += self.cfg.asset.table_offsets[0]
         self.small_box_root_states[env_ids, 1] += self.cfg.asset.table_offsets[1]
-        self.small_box_root_states[env_ids, 2] += self.cfg.asset.table_offsets[2]
+        self.small_box_root_states[env_ids, 2] += self.cfg.asset.table_offsets[2] + 0.5 * self.cfg.asset.small_box_size
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
         ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
@@ -427,6 +430,7 @@ class H1Multitask(LeggedRobot):
         # Proprioception observations
         q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
         dq = self.dof_vel * self.obs_scales.dof_vel
+        contact_mask = self.contact_forces[:, self.feet_indices, 2] > 5.
 
         proprioception_obs_buf = torch.cat((
             q,                                              # |num_actions|
@@ -435,6 +439,21 @@ class H1Multitask(LeggedRobot):
             self.base_lin_vel * self.obs_scales.lin_vel,    # 3
             self.base_ang_vel * self.obs_scales.ang_vel,    # 3
             self.base_euler_xyz * self.obs_scales.quat,     # 3
+        ), dim=-1)
+
+        proprioception_privileged_obs_buf = torch.cat((
+            (self.dof_pos - self.default_joint_pd_target) * \
+            self.obs_scales.dof_pos,                        # |A|
+            self.dof_vel * self.obs_scales.dof_vel,         # |A|
+            self.actions,                                   # |A|
+            self.base_lin_vel * self.obs_scales.lin_vel,    # 3
+            self.base_ang_vel * self.obs_scales.ang_vel,    # 3
+            self.base_euler_xyz * self.obs_scales.quat,     # 3
+            self.rand_push_force[:, :2],                    # 2
+            self.rand_push_torque,                          # 3
+            self.env_frictions,                             # 1
+            self.body_mass / 30.,                           # 1
+            contact_mask                                    # 2
         ), dim=-1)
 
         # Task relevant observations (object, goal)
@@ -455,13 +474,14 @@ class H1Multitask(LeggedRobot):
         ## Task box
         small_box_pos = self.small_box_root_states[:, :3]
         wrist_small_box_dist_obs = torch.flatten(humanoid_wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
-        small_box_goal_dist_obs = small_box_pos - self.small_box_goal_pos
+        small_box_goal_pos = self.small_box_goal_pos
+        small_box_goal_dist_obs = small_box_pos - small_box_goal_pos
         ## Task ball
         humanoid_torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
         ball_pos = self.ball_root_states[:, :3]
         torso_ball_dist_obs = humanoid_torso_pos - ball_pos
-        ball_goal_dist_obs = ball_pos - self.ball_goal_pos
-
+        ball_goal_pos = self.ball_goal_pos
+        ball_goal_dist_obs = ball_pos - ball_goal_pos
         task_obs_buf = torch.cat((
             ## Task reach
             wrist_goal_pos_dist_obs,                # 6
@@ -478,7 +498,62 @@ class H1Multitask(LeggedRobot):
             ball_goal_dist_obs,                     # 3
         ), dim=-1)
 
+        task_privileged_obs_buf = torch.cat((
+            torch.flatten(humanoid_wrist_pos, start_dim=1), # 6
+            ## Task reach
+            torch.flatten(wrist_goal_pos, start_dim=1),     # 6
+            wrist_goal_pos_dist_obs,                        # 6
+            ## Task button
+            button_goal_pos,                                # 3
+            wrist_button_dist_obs,                          # 3
+            ## Task cabinet
+            wrist_cabinet_dist_obs,                         # 6
+            cabinet_dof_pos_goal_dist_obs,                  # 2
+            ## Task box
+            small_box_pos,                                  # 3
+            wrist_small_box_dist_obs,                       # 6
+            small_box_goal_pos,                             # 3
+            small_box_goal_dist_obs,                        # 3
+            ## Task ball
+            humanoid_torso_pos,                             # 3
+            ball_pos,                                       # 3
+            torso_ball_dist_obs,                            # 3
+            ball_goal_pos,                                  # 3
+            ball_goal_dist_obs                              # 3
+        ), dim=-1)
+
         # Phase observations
+        task_one_hot = torch.zeros(self.num_envs, self.num_tasks, device=self.device)
+        task_one_hot.scatter_(1, self.task_ids.view(-1, 1), 1.0)  # [num_envs, num_tasks]
+
+        phase_obs_buf = task_one_hot
+        phase_privileged_obs_buf = task_one_hot
+
+        # Concat all observations
+        obs_buf = torch.cat((
+            proprioception_obs_buf,
+            task_obs_buf,
+            phase_obs_buf
+        ), dim=-1)
+        self.privileged_obs_buf = torch.cat((
+            proprioception_privileged_obs_buf,
+            task_privileged_obs_buf,
+            phase_privileged_obs_buf,
+        ), dim=-1)
+
+        if self.add_noise:  
+            obs_now = obs_buf.clone() + torch.randn_like(obs_buf) * self.noise_scale_vec
+        else:
+            obs_now = obs_buf.clone()
+
+        self.obs_history.append(obs_now)
+        self.critic_history.append(self.privileged_obs_buf)
+
+        obs_buf_all = torch.stack([self.obs_history[i]
+                                   for i in range(self.obs_history.maxlen)], dim=1)  # N,T,K
+
+        self.obs_buf = obs_buf_all.reshape(self.num_envs, -1)  # N, T*K
+        self.privileged_obs_buf = torch.cat([self.critic_history[i] for i in range(self.cfg.env.c_frame_stack)], dim=1)
 
     def step(self, actions):
         with torch.no_grad():
