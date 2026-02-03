@@ -17,11 +17,11 @@ class H1MultitaskCfg(LeggedRobotCfg):
         TASK_BALL = 4
 
         # Episode length
-        reach_length_s = 8.0
-        button_length_s = 8.0
-        cabinet_length_s = 8.0
-        box_length_s = 12.0
-        ball_length_s = 12.0
+        reach_length_s = 1.0
+        button_length_s = 1.0
+        cabinet_length_s = 1.0
+        box_length_s = 1.0
+        ball_length_s = 1.0
         episode_length_s = reach_length_s + button_length_s + cabinet_length_s + box_length_s + ball_length_s
 
     class asset(LeggedRobotCfg.asset):

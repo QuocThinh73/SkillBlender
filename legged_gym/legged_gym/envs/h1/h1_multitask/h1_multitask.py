@@ -22,6 +22,7 @@ class H1Multitask(LeggedRobot):
         self.TASK_CABINET = cfg.env.TASK_CABINET
         self.TASK_BOX = cfg.env.TASK_BOX
         self.TASK_BALL = cfg.env.TASK_BALL
+        self.task_ids = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
         # Goals
         ## Task reach
@@ -34,6 +35,27 @@ class H1Multitask(LeggedRobot):
         self.small_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Task ball
         self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
+        # Task conditioning
+        ## Fixed chain order
+        self.task_chain = torch.tensor(
+            [self.TASK_REACH, self.TASK_BUTTON, self.TASK_CABINET, self.TASK_BOX, self.TASK_BALL],
+            device=self.device, dtype=torch.long
+        )
+        self.num_chain = self.task_chain.numel()
+        ## Convert length to max steps
+        self.chain_max_task_length = torch.tensor([
+            np.ceil(self.cfg.env.reach_length_s / self.dt),
+            np.ceil(self.cfg.env.button_length_s / self.dt),
+            np.ceil(self.cfg.env.cabinet_length_s / self.dt),
+            np.ceil(self.cfg.env.box_length_s / self.dt),
+            np.ceil(self.cfg.env.ball_length_s / self.dt),
+        ], device=self.device, dtype=torch.long)
+        ## Buffers for switch task
+        self.task_ptr = torch.zeros(self.num_envs, device=self.device, dtype=torch.long) 
+        self.switch_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.task_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.max_task_length = self.chain_max_task_length[self.task_ptr].clone()
 
     def _push_robots(self):
         pass
@@ -325,9 +347,6 @@ class H1Multitask(LeggedRobot):
                                               gymtorch.unwrap_tensor(ids), len(ids))
 
     def _reset_root_states(self, env_ids):
-        if len(env_ids) == 0:
-            return
-
         # Reset humanoid root states
         self.humanoid_root_states[env_ids] = self.humanoid_base_init_state
         self.humanoid_root_states[env_ids, :3] += self.env_origins[env_ids]
@@ -364,6 +383,11 @@ class H1Multitask(LeggedRobot):
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
 
+        self.task_ptr[env_ids] = 0
+        self.task_ids[env_ids] = self.task_chain[0]
+        self.task_length_buf[env_ids] = 0
+        self.max_task_length[env_ids] = self.chain_max_task_length[0]
+
     def compute_observations(self):
         # Proprioception observations
         q = (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos
@@ -383,7 +407,7 @@ class H1Multitask(LeggedRobot):
         humanoid_wrist_pos = humanoid_wrist[:, :, :3]
         ## Task reach
         wrist_goal_pos = self.wrist_goal_pos
-        wrist_goal_pos_dist_obs = torch.flatten(humanoid_wrist_pos - wrist_goal_pos, start_dim=1)
+        wrist_goal_pos_dist_obs = torch.flatten(humanoid_wrist - wrist_goal_pos, start_dim=1)
         ## Task button
         humanoid_left_wrist_pos = humanoid_wrist[:, 0, :3]
         button_goal_pos = self.button_goal_pos
@@ -463,6 +487,7 @@ class H1Multitask(LeggedRobot):
 
         self.episode_length_buf += 1
         self.common_step_counter += 1
+        self.task_length_buf += 1
 
         # prepare quantities
         self.base_quat[:] = self.humanoid_root_states[:, 3:7]
@@ -476,8 +501,12 @@ class H1Multitask(LeggedRobot):
         # compute observations, rewards, resets, ...
         self.check_termination()
         self.compute_reward()
-        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        self.reset_idx(env_ids)
+        reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        alive_env_ids = (~self.reset_buf).nonzero(as_tuple=False).flatten()
+        self.check_switch(alive_env_ids)
+        switch_env_ids = self.switch_buf.nonzero(as_tuple=False).flatten()
+        self.switch_idx(switch_env_ids)
+        self.reset_idx(reset_env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_last_actions[:] = torch.clone(self.last_actions[:])
@@ -485,5 +514,21 @@ class H1Multitask(LeggedRobot):
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.humanoid_root_states[:, 7:13]
         self.last_rigid_state[:] = self.rigid_state[:]
+
+    def check_switch(self, env_ids):
+        timeout = (self.task_length_buf[env_ids] >= self.max_task_length[env_ids])
+        self.switch_buf[env_ids] |= timeout
+        print(self.switch_buf)
+
+    def switch_idx(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        
+        new_task_ptr = self.task_ptr[env_ids] + 1
+        self.task_ptr[env_ids] = new_task_ptr
+        self.task_ids[env_ids] = self.task_chain[new_task_ptr]
+        self.task_length_buf[env_ids] = 0
+        self.max_task_length[env_ids] = self.chain_max_task_length[new_task_ptr]
+        self.switch_buf[env_ids] = False
 
 # ================================================ Rewards ================================================== #
