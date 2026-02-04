@@ -727,6 +727,8 @@ class H1Multitask(LeggedRobot):
         wrist_goal_distance = torch.flatten(wrist_pos - wrist_goal_pos, start_dim=1)
         wrist_goal_error = torch.mean(torch.abs(wrist_goal_distance), dim=1)
         reward = torch.exp(-4 * wrist_goal_error)
+        mask = self._task_mask(self.TASK_REACH)
+        return mask * reward
 
     ## Task button
     ### Main goal
@@ -736,6 +738,8 @@ class H1Multitask(LeggedRobot):
         wrist_button_distance = left_wrist_pos - button_goal_pos
         wrist_button_error = torch.mean(torch.abs(wrist_button_distance), dim=1)
         reward = torch.exp(-4 * wrist_button_error)
+        mask = self._task_mask(self.TASK_BUTTON)
+        return mask * reward
 
     ## Task cabinet
     def _reward_wrist_cabinet_distance(self):
@@ -744,6 +748,8 @@ class H1Multitask(LeggedRobot):
         wrist_cabinet_distance = torch.flatten(wrist_pos - cabinet_pos.unsqueeze(1), start_dim=1)
         wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_distance), dim=1)
         reward = torch.exp(-4 * wrist_cabinet_error)
+        mask = self._task_mask(self.TASK_CABINET)
+        return mask * reward
 
     ### Main goal
     def _reward_cabinet_goal_distance(self):
@@ -752,6 +758,8 @@ class H1Multitask(LeggedRobot):
         cabinet_goal_distance = cabinet_dof_state - cabinet_dof_state_goal
         cabinet_goal_error = torch.mean(torch.abs(cabinet_goal_distance), dim=1)
         reward = torch.exp(-4 * cabinet_goal_error)
+        mask = self._task_mask(self.TASK_CABINET)
+        return mask * reward
 
     ## Task box
     def _reward_wrist_small_box_distance(self):
@@ -760,6 +768,8 @@ class H1Multitask(LeggedRobot):
         wrist_small_box_distance = torch.flatten(wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
         wrist_small_box_error = torch.mean(torch.abs(wrist_small_box_distance), dim=1)
         reward = torch.exp(-4 * wrist_small_box_error)
+        mask = self._task_mask(self.TASK_BOX)
+        return mask * reward
 
     ### Main goal
     def _reward_small_box_goal_distance(self):
@@ -768,6 +778,8 @@ class H1Multitask(LeggedRobot):
         small_box_goal_distance = small_box_pos - small_box_goal_pos
         small_box_goal_error = torch.mean(torch.abs(small_box_goal_distance), dim=1)
         reward = torch.exp(-4 * small_box_goal_error) 
+        mask = self._task_mask(self.TASK_BOX)
+        return mask * reward
 
     ## Task ball
     def _reward_torso_ball_distance(self):
@@ -776,6 +788,8 @@ class H1Multitask(LeggedRobot):
         torso_ball_distance = (torso_pos - ball_pos)[:, :2]
         torso_ball_error = torch.mean(torch.abs(torso_ball_distance), dim=1)
         reward = torch.exp(-4 * torso_ball_error)
+        mask = self._task_mask(self.TASK_BALL)
+        return mask * reward
 
     ### Main goal
     def _reward_ball_goal_distance(self):
@@ -783,6 +797,98 @@ class H1Multitask(LeggedRobot):
         ball_goal_pos = self.ball_goal_pos
         ball_goal_distance = ball_pos - ball_goal_pos
         ball_goal_error = torch.mean(torch.abs(ball_goal_distance), dim=1)
-        reward = torch.exp(-1 * ball_goal_error)
+        reward = torch.exp(-4 * ball_goal_error)
+        mask = self._task_mask(self.TASK_BALL)
+        return mask * reward
 
     # Base rewards
+    def _reward_feet_distance(self):
+        """
+        Calculates the reward based on the distance between the feet. Penilize feet get close to each other or too far away.
+        """
+        foot_pos = self.rigid_state[:, self.feet_indices, :2]
+        foot_dist = torch.norm(foot_pos[:, 0, :] - foot_pos[:, 1, :], dim=1)
+        fd = self.cfg.rewards.min_dist
+        max_df = self.cfg.rewards.max_dist
+        d_min = torch.clamp(foot_dist - fd, -0.5, 0.)
+        d_max = torch.clamp(foot_dist - max_df, 0, 0.5)
+        return (torch.exp(-torch.abs(d_min) * 100) + torch.exp(-torch.abs(d_max) * 100)) / 2, foot_dist
+    
+    def _reward_knee_distance(self):
+        """
+        Calculates the reward based on the distance between the knee of the humanoid.
+        """
+        knee_pos = self.rigid_state[:, self.knee_indices, :2]
+        knee_dist = torch.norm(knee_pos[:, 0, :] - knee_pos[:, 1, :], dim=1)
+        fd = self.cfg.rewards.min_dist
+        max_df = self.cfg.rewards.max_dist / 2
+        d_min = torch.clamp(knee_dist - fd, -0.5, 0.)
+        d_max = torch.clamp(knee_dist - max_df, 0, 0.5)
+        return (torch.exp(-torch.abs(d_min) * 100) + torch.exp(-torch.abs(d_max) * 100)) / 2, knee_dist
+    
+    def _reward_collision(self):
+        """
+        Penalizes collisions of the robot with the environment, specifically focusing on selected body parts.
+        This encourages the robot to avoid undesired contact with objects or surfaces.
+        """
+        return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
+    
+    def _reward_action_smoothness(self):
+        """
+        Encourages smoothness in the robot's actions by penalizing large differences between consecutive actions.
+        This is important for achieving fluid motion and reducing mechanical stress.
+        """
+        term_1 = torch.sum(torch.square(
+            self.last_actions - self.actions), dim=1)
+        term_2 = torch.sum(torch.square(
+            self.actions + self.last_last_actions - 2 * self.last_actions), dim=1)
+        term_3 = 0.05 * torch.sum(torch.abs(self.actions), dim=1)
+        return term_1 + term_2 + term_3
+    
+# ==== From HumanPlus ==== #
+    ## _reward_lin_vel_z, _reward_ang_vel_xy, _reward_action_rate, _reward_termination, _reward_dof_pos_limits, _reward_dof_vel_limits, _reward_torque_limits, **_reward_stumble**, **_reward_stand_still**, _reward_target_jt (joint_pos)
+    def _reward_lin_vel_z(self):
+        # Penalize z axis base linear velocity
+        return torch.square(self.base_lin_vel[:, 2])
+    
+    def _reward_ang_vel_xy(self):
+        # Penalize xy axes base angular velocity
+        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
+    
+    def _reward_action_rate(self):
+        # Penalize changes in actions
+        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
+    
+    def _reward_termination(self):
+        # Terminal reward / penalty
+        return self.reset_buf * ~self.time_out_buf
+    
+    def _reward_dof_pos_limits(self):
+        # Penalize dof positions too close to the limit
+        out_of_limits = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.) # lower limit
+        out_of_limits += (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.)
+        return torch.sum(out_of_limits, dim=1)
+
+    def _reward_dof_vel_limits(self):
+        # Penalize dof velocities too close to the limit
+        # clip to max error = 1 rad/s per joint to avoid huge penalties
+        return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
+    
+    def _reward_torque_limits(self):
+        # penalize torques too close to the limit
+        return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
+    
+    def _reward_stumble(self):
+        # Penalize feet hitting vertical surfaces
+        return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) >\
+             5 *torch.abs(self.contact_forces[:, self.feet_indices, 2]), dim=1)
+        
+    def _reward_stand_still(self):
+        # Penalize motion at zero commands
+        return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
+    
+    def _reward_target_jt(self):
+        # # Penalize distance to target joint angles
+        # target_jt_error = torch.mean(torch.abs(self.dof_pos - self.target_jt), dim=1)
+        # return torch.exp(-4 * target_jt_error), target_jt_error
+        return 0

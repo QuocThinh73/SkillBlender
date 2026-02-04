@@ -49,20 +49,20 @@ class H1MultitaskCfg(LeggedRobotCfg):
         wrist_name = "wrist"
 
         terminate_after_contacts_on = [
-            # 'pelvis',
-            # 'torso',
-            # 'waist',
-            # 'shoulder',
-            # 'elbow',
-            # 'knee',
+            'pelvis',
+            'torso',
+            'waist',
+            'shoulder',
+            'elbow',
+            'knee',
         ]
         penalize_contacts_on = [
-            # 'hip', 
-            # 'knee', 
-            # 'pelvis', 
-            # 'torso', 
-            # 'shoulder', 
-            # 'elbow'
+            'hip', 
+            'knee', 
+            'pelvis', 
+            'torso', 
+            'shoulder', 
+            'elbow'
         ]
         self_collisions = 0  # 1 to disable, 0 to enable...bitwise filter
         flip_visual_attachments = False
@@ -226,6 +226,9 @@ class H1MultitaskCfg(LeggedRobotCfg):
             offset_z = [-0.1, 0.1]
 
     class rewards:
+        min_dist = 0.05
+        max_dist = 0.25
+
         only_positive_rewards = True
 
         class scales:
