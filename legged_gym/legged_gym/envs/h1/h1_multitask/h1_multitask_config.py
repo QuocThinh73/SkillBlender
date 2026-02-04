@@ -232,7 +232,43 @@ class H1MultitaskCfg(LeggedRobotCfg):
         only_positive_rewards = True
 
         class scales:
-            pass
+            # Task rewards
+            ## Task reach
+            ### Main goal
+            wrist_goal_distance = 0.0
+            ## Task button
+            ### Main goal
+            wrist_button_distance = 0.0
+            ## Task cabinet
+            wrist_cabinet_distance = 0.0
+            ### Main goal
+            cabinet_goal_distance = 0.0
+            ## Task box
+            wrist_small_box_distance = 0.0
+            ### Main goal
+            small_box_goal_distance = 0.0
+            ## Task ball
+            torso_ball_distance = 0.0
+            ### Main goal
+            ball_goal_distance = 0.0
+
+            # Base rewards
+            feet_distance = 0.0
+            knee_distance = 0.0
+            collision = 0.0
+            action_smoothness = 0.0
+
+            # HumanPlus rewards
+            lin_vel_z = 0.0
+            ang_vel_xy = 0.0
+            action_rate = 0.0
+            termination = 0.0
+            dof_pos_limits = 0.0
+            dof_vel_limits = 0.0
+            torque_limits = 0.0
+            stumble = 0.0
+            # stand_still = 0.0
+            # target_jt = 0.0
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False
