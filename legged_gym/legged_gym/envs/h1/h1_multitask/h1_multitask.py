@@ -802,6 +802,27 @@ class H1Multitask(LeggedRobot):
         return mask * reward
 
     # Base rewards
+    def _reward_orientation(self):
+        """
+        Calculates the reward for maintaining a flat base orientation. It penalizes deviation 
+        from the desired base orientation using the base euler angles and the projected gravity vector.
+        """
+        quat_mismatch = torch.exp(-torch.sum(torch.abs(self.base_euler_xyz[:, :2]), dim=1) * 10)
+        orientation = torch.exp(-torch.norm(self.projected_gravity[:, :2], dim=1) * 20)
+        return (quat_mismatch + orientation) / 2.
+    
+    def _reward_base_height(self):
+        """
+        Calculates the reward based on the robot's base height. Penalizes deviation from a target base height.
+        The reward is computed based on the height difference between the robot's base and the average height 
+        of its feet when they are in contact with the ground.
+        """
+        stance_mask = self._get_gait_phase()
+        measured_heights = torch.sum(
+            self.rigid_state[:, self.feet_indices, 2] * stance_mask, dim=1) / torch.sum(stance_mask, dim=1)
+        base_height = self.root_states[:, 2] - (measured_heights - 0.05)
+        return torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 100)
+
     def _reward_feet_distance(self):
         """
         Calculates the reward based on the distance between the feet. Penilize feet get close to each other or too far away.

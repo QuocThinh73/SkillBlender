@@ -228,45 +228,50 @@ class H1MultitaskCfg(LeggedRobotCfg):
     class rewards:
         min_dist = 0.05
         max_dist = 0.25
+        soft_dof_vel_limit = 0.8
+        soft_torque_limit = 0.95
+        base_height_target = 0.89
 
-        only_positive_rewards = True
+        only_positive_rewards = False
 
         class scales:
             # Task rewards
             ## Task reach
             ### Main goal
-            wrist_goal_distance = 0.0
+            wrist_goal_distance = 5.0
             ## Task button
             ### Main goal
-            wrist_button_distance = 0.0
+            wrist_button_distance = 5.0
             ## Task cabinet
-            wrist_cabinet_distance = 0.0
+            wrist_cabinet_distance = 4.0
             ### Main goal
-            cabinet_goal_distance = 0.0
+            cabinet_goal_distance = 5.0
             ## Task box
-            wrist_small_box_distance = 0.0
+            wrist_small_box_distance = 4.0
             ### Main goal
-            small_box_goal_distance = 0.0
+            small_box_goal_distance = 5.0
             ## Task ball
-            torso_ball_distance = 0.0
+            torso_ball_distance = 4.0
             ### Main goal
-            ball_goal_distance = 0.0
+            ball_goal_distance = 5.0
 
             # Base rewards
-            feet_distance = 0.0
-            knee_distance = 0.0
-            collision = 0.0
-            action_smoothness = 0.0
+            orientation = 1.0
+            base_height = 0.2
+            feet_distance = 0.5
+            knee_distance = 0.2
+            collision = -0.2
+            action_smoothness = -0.002
 
-            # HumanPlus rewards
-            lin_vel_z = 0.0
-            ang_vel_xy = 0.0
-            action_rate = 0.0
-            termination = 0.0
-            dof_pos_limits = 0.0
-            dof_vel_limits = 0.0
-            torque_limits = 0.0
-            stumble = 0.0
+            # HumanPlus
+            lin_vel_z = -0.05
+            ang_vel_xy = -0.05
+            action_rate = -0.05
+            termination = -100.0
+            dof_pos_limits = -0.1
+            dof_vel_limits = -0.1
+            torque_limits = -0.1
+            stumble = -0.1
             # stand_still = 0.0
             # target_jt = 0.0
 
