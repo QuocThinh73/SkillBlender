@@ -423,9 +423,9 @@ class H1Multitask(LeggedRobot):
         self.small_box_root_states[env_ids, 1] = pos[:, 1]  + self.cfg.asset.table_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.small_box_range_y).to(self.device)
         self.small_box_root_states[env_ids, 2] = self.cfg.asset.table_offsets[2] + 0.5 * self.cfg.asset.table_dims[2] + 0.5 * self.cfg.asset.small_box_size
         # Reset small box goal
-        self.small_box_goal_pos[env_ids, 2] = self.small_box_root_states[env_ids, 2]
         self.small_box_goal_pos[env_ids, 0] = self.small_box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_x).to(self.device)
         self.small_box_goal_pos[env_ids, 1] = self.small_box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_y).to(self.device)
+        self.small_box_goal_pos[env_ids, 2] = self.small_box_root_states[env_ids, 2]
         # Task button
         self.button_goal_pos[env_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offsets[0]
         self.button_goal_pos[env_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_goal_y).to(self.device)
@@ -460,21 +460,6 @@ class H1Multitask(LeggedRobot):
             gymtorch.unwrap_tensor(ids), 
             len(ids)
         )
-
-    def reset_idx(self, env_ids):
-        super().reset_idx(env_ids)
-
-        self.task_ptr[env_ids] = 0
-        self.task_ids[env_ids] = self.task_chain[0]
-        self.task_length_buf[env_ids] = 0
-        self.max_task_length[env_ids] = self.chain_max_task_length[0]
-
-        for i in range(self.obs_history.maxlen):
-            self.obs_history[i][env_ids] *= 0
-        for i in range(self.critic_history.maxlen):
-            self.critic_history[i][env_ids] *= 0
-
-        print(self.obs_buf[0])
 
     def compute_observations(self):
         # Proprioception observations
@@ -716,48 +701,88 @@ class H1Multitask(LeggedRobot):
         self.max_task_length[env_ids] = self.chain_max_task_length[new_task_ptr]
         self.switch_buf[env_ids] = False
 
-        print(self.obs_buf[0])
+    def reset_idx(self, env_ids):
+        super().reset_idx(env_ids)
+
+        self.task_ptr[env_ids] = 0
+        self.task_ids[env_ids] = self.task_chain[0]
+        self.task_length_buf[env_ids] = 0
+        self.max_task_length[env_ids] = self.chain_max_task_length[0]
+
+        for i in range(self.obs_history.maxlen):
+            self.obs_history[i][env_ids] *= 0
+        for i in range(self.critic_history.maxlen):
+            self.critic_history[i][env_ids] *= 0
 
 # ================================================ Rewards ================================================== #
-    # Task reach
-    ## Main goal
+    def _task_mask(self, task_id):
+        return (self.task_ids == task_id).float()
+    
+    # Task rewards
+    ## Task reach
+    ### Main goal
     def _reward_wrist_goal_distance(self):
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         wrist_goal_pos = self.wrist_goal_pos
         wrist_goal_distance = torch.flatten(wrist_pos - wrist_goal_pos, start_dim=1)
+        wrist_goal_error = torch.mean(torch.abs(wrist_goal_distance), dim=1)
+        reward = torch.exp(-4 * wrist_goal_error)
 
-    # Task button
-    ## Main goal
+    ## Task button
+    ### Main goal
     def _reward_wrist_button_distance(self):
-        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        left_wrist_pos = self.rigid_state[:, self.wrist_indices[0], :3]
         button_goal_pos = self.button_goal_pos
+        wrist_button_distance = left_wrist_pos - button_goal_pos
+        wrist_button_error = torch.mean(torch.abs(wrist_button_distance), dim=1)
+        reward = torch.exp(-4 * wrist_button_error)
 
-    # Task cabinet
+    ## Task cabinet
     def _reward_wrist_cabinet_distance(self):
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         cabinet_pos = self.cabinet_root_states[:, :3]
+        wrist_cabinet_distance = torch.flatten(wrist_pos - cabinet_pos.unsqueeze(1), start_dim=1)
+        wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_distance), dim=1)
+        reward = torch.exp(-4 * wrist_cabinet_error)
 
-    ## Main goal
+    ### Main goal
     def _reward_cabinet_goal_distance(self):
         cabinet_dof_state = self.cabinet_dof_state[:, :, 0]
         cabinet_dof_state_goal = self.cabinet_dof_goal
+        cabinet_goal_distance = cabinet_dof_state - cabinet_dof_state_goal
+        cabinet_goal_error = torch.mean(torch.abs(cabinet_goal_distance), dim=1)
+        reward = torch.exp(-4 * cabinet_goal_error)
 
-    # Task box
+    ## Task box
     def _reward_wrist_small_box_distance(self):
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         small_box_pos = self.small_box_root_states[:, :3]
+        wrist_small_box_distance = torch.flatten(wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
+        wrist_small_box_error = torch.mean(torch.abs(wrist_small_box_distance), dim=1)
+        reward = torch.exp(-4 * wrist_small_box_error)
 
-    ## Main goal
+    ### Main goal
     def _reward_small_box_goal_distance(self):
         small_box_pos = self.small_box_root_states[:, :3]
         small_box_goal_pos = self.small_box_goal_pos
+        small_box_goal_distance = small_box_pos - small_box_goal_pos
+        small_box_goal_error = torch.mean(torch.abs(small_box_goal_distance), dim=1)
+        reward = torch.exp(-4 * small_box_goal_error) 
 
-    # Task ball
+    ## Task ball
     def _reward_torso_ball_distance(self):
         torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
         ball_pos = self.ball_root_states[:, :3]
+        torso_ball_distance = (torso_pos - ball_pos)[:, :2]
+        torso_ball_error = torch.mean(torch.abs(torso_ball_distance), dim=1)
+        reward = torch.exp(-4 * torso_ball_error)
 
-    ## Main goal
+    ### Main goal
     def _reward_ball_goal_distance(self):
         ball_pos = self.ball_root_states[:, :3]
         ball_goal_pos = self.ball_goal_pos
+        ball_goal_distance = ball_pos - ball_goal_pos
+        ball_goal_error = torch.mean(torch.abs(ball_goal_distance), dim=1)
+        reward = torch.exp(-1 * ball_goal_error)
+
+    # Base rewards
