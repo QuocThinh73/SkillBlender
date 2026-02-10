@@ -81,6 +81,26 @@ class H1Multitask(LeggedRobot):
 
         self.gym.set_actor_root_state_tensor(
             self.sim, gymtorch.unwrap_tensor(self.root_states))
+        
+    def  _get_phase(self):
+        cycle_time = self.cfg.rewards.cycle_time
+        phase = self.episode_length_buf * self.dt / cycle_time
+        return phase
+
+    def _get_gait_phase(self):
+        # return float mask 1 is stance, 0 is swing
+        phase = self._get_phase()
+        sin_pos = torch.sin(2 * torch.pi * phase)
+        # Add double support phase
+        stance_mask = torch.zeros((self.num_envs, 2), device=self.device)
+        # left foot stance
+        stance_mask[:, 0] = sin_pos >= 0
+        # right foot stance
+        stance_mask[:, 1] = sin_pos < 0
+        # Double support phase
+        stance_mask[torch.abs(sin_pos) < 0.1] = 1
+
+        return stance_mask
 
     def create_sim(self):
         self.up_axis_idx = 2
@@ -112,6 +132,9 @@ class H1Multitask(LeggedRobot):
         feet_names = [s for s in self.body_names if self.cfg.asset.foot_name in s]
         knee_names = [s for s in self.body_names if self.cfg.asset.knee_name in s]
 
+        penalized_contact_names = []
+        for name in self.cfg.asset.penalize_contacts_on:
+            penalized_contact_names.extend([s for s in self.body_names if name in s])
         termination_contact_names = []
         for name in self.cfg.asset.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in self.body_names if name in s])
@@ -276,6 +299,10 @@ class H1Multitask(LeggedRobot):
         self.knee_indices = torch.zeros(len(knee_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(knee_names)):
             self.knee_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], knee_names[i])
+
+        self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(penalized_contact_names)):
+            self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], penalized_contact_names[i])
 
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
@@ -736,7 +763,7 @@ class H1Multitask(LeggedRobot):
     
     def _get_task_target_pos(self):
         """Return target world position [num_envs, 3] for current task in each env."""
-        target = self.root_states[:, :3].clone()
+        target = self.humanoid_root_states[:, :3].clone()
 
         reach_mask = (self.task_ids == self.TASK_REACH)
         if reach_mask.any():
@@ -961,7 +988,7 @@ class H1Multitask(LeggedRobot):
         stance_mask = self._get_gait_phase()
         measured_heights = torch.sum(
             self.rigid_state[:, self.feet_indices, 2] * stance_mask, dim=1) / torch.sum(stance_mask, dim=1)
-        base_height = self.root_states[:, 2] - (measured_heights - 0.05)
+        base_height = self.humanoid_root_states[:, 2] - (measured_heights - 0.05)
         return torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 100)
 
     def _reward_feet_distance(self):
