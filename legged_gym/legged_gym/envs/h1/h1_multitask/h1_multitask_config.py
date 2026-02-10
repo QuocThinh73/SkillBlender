@@ -27,7 +27,7 @@ class H1MultitaskCfg(LeggedRobotCfg):
 
         command_dim = num_task_obs
         
-        num_envs = 4
+        num_envs = 2048
         env_spacing = 10.0
 
         # Episode length
@@ -190,8 +190,8 @@ class H1MultitaskCfg(LeggedRobotCfg):
             rest_offset = 0.0   # [m]
             bounce_threshold_velocity = 0.1  # [m/s]
             max_depenetration_velocity = 1.0
-            max_gpu_contact_pairs = 2**23  # 2**24 -> needed for 8000 envs and more
-            default_buffer_size_multiplier = 5
+            max_gpu_contact_pairs = 2**24  # 2**24 -> needed for 8000 envs and more
+            default_buffer_size_multiplier = 10
             # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
             contact_collection = 2
 
@@ -231,6 +231,8 @@ class H1MultitaskCfg(LeggedRobotCfg):
         soft_dof_vel_limit = 0.8
         soft_torque_limit = 0.95
         base_height_target = 0.89
+
+        cycle_time = 0.64
 
         only_positive_rewards = False
 
@@ -305,3 +307,69 @@ class H1MultitaskCfg(LeggedRobotCfg):
 
 class H1MultitaskCfgPPO(LeggedRobotCfgPPO):
     pass
+
+from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
+
+class H1MultitaskCfg(LeggedRobotCfg):
+    seed = 5
+    runner_class_name = 'OnPolicyRunner'   # DWLOnPolicyRunner
+
+    class policy:
+        init_noise_std = 1.0
+        actor_hidden_dims = [512, 256, 128]
+        critic_hidden_dims = [768, 256, 128]
+        # HRL
+        num_dofs = H1MultitaskCfg.env.num_actions
+        frame_stack = H1MultitaskCfg.env.frame_stack
+        command_dim = H1MultitaskCfg.env.command_dim
+        # Expert skills
+        skill_dict = {
+            'h1_walking': {
+                "experiment_name": "h1_walking",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-2, 2)
+            },
+            'h1_reaching': {
+                "experiment_name": "h1_reaching",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            },
+            'h1_squatting': {
+                "experiment_name": "h1_squatting",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            },
+            'h1_stepping': {
+                "experiment_name": "h1_stepping",
+                "load_run": "0000_best",
+                "checkpoint": -1,
+                "low_high": (-1, 1)
+            }
+        }
+
+    class algorithm(LeggedRobotCfgPPO.algorithm):
+        entropy_coef = 0.001
+        learning_rate = 1e-5
+        num_learning_epochs = 2
+        gamma = 0.994
+        lam = 0.9
+        num_mini_batches = 4
+
+    class runner:
+        policy_class_name = 'ActorCriticHierarchical'
+        algorithm_class_name = 'PPO'
+        num_steps_per_env = 60  # per iteration
+        max_iterations = 30001 # 3001  # number of policy updates
+
+        # logging
+        save_interval = 1000  # check for potential saves every this many iterations
+        experiment_name = 'h1_task_box'
+        run_name = ''
+        # load and resume
+        resume = False
+        load_run = -1  # -1 = last run
+        checkpoint = -1  # -1 = last saved model
+        resume_path = None  # updated from load_run and ckpt
