@@ -137,7 +137,7 @@ def play(args):
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                     video.write(img[..., :3])
             
-            video.release()
+        video.release()
 
 if __name__ == "__main__":
     EXPORT_POLICY = True
