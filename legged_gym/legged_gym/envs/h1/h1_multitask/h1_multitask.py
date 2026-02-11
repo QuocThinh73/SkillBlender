@@ -18,6 +18,11 @@ class H1Multitask(LeggedRobot):
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
         self.cfg = cfg
 
+        self.PHASE_TURN = cfg.env.PHASE_TURN
+        self.PHASE_WALK = cfg.env.PHASE_WALK
+        self.PHASE_INTERACT = cfg.env.PHASE_INTERACT
+        self.phase = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
         self.num_tasks = cfg.env.num_tasks
         self.TASK_REACH = cfg.env.TASK_REACH
         self.TASK_BUTTON = cfg.env.TASK_BUTTON
@@ -38,8 +43,8 @@ class H1Multitask(LeggedRobot):
         ## Task ball
         self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Guide rewards
+        self.prev_yaw_error = torch.zeros(self.num_envs, device=self.device)
         self.prev_root_target_dist = torch.zeros(self.num_envs, device=self.device)
-        self.walk_to_target_done = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
         # Task conditioning
         ## Fixed chain order
@@ -679,6 +684,8 @@ class H1Multitask(LeggedRobot):
         alive_env_ids = (~self.reset_buf).nonzero(as_tuple=False).flatten()
         self.check_switch(alive_env_ids)
         switch_env_ids = self.switch_buf.nonzero(as_tuple=False).flatten()
+        in_task_env_ids = (~self.switch_buf).nonzero(as_tuple=False).flatten()
+        self.update_phase(in_task_env_ids)
         self.switch_idx(switch_env_ids)
         self.reset_idx(reset_env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
@@ -735,6 +742,9 @@ class H1Multitask(LeggedRobot):
 
         self.reset_buf[env_ids] |= timeout & is_last
 
+    def update_phase(self, env_ids):
+        pass
+
     def switch_idx(self, env_ids):
         if len(env_ids) == 0:
             return
@@ -757,12 +767,16 @@ class H1Multitask(LeggedRobot):
         self.task_length_buf[env_ids] = 0
         self.max_task_length[env_ids] = self.chain_max_task_length[new_task_ptr]
         self.switch_buf[env_ids] = False
+        self.phase[env_ids] = self.PHASE_TURN
 
-        with torch.no_grad():
-            base_xy = self.humanoid_root_states[env_ids, :2]
-            target_xy = self._get_task_target_pos()[env_ids, :2]
-            d_xy = torch.norm(target_xy - base_xy, dim=1)
-            self.prev_root_target_dist[env_ids] = d_xy.detach()
+        target = self._get_task_target_pos()[env_ids]
+        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
+        self.prev_yaw_error[env_ids] = yaw_error.detach()
+
+        root_pos = self.humanoid_root_states[env_ids, :2]
+        target_pos = self._get_task_target_pos()[env_ids, :2]
+        root_target_dist = torch.norm(root_pos - target_pos, dim=1)
+        self.prev_root_target_dist[env_ids] = root_target_dist.detach()
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
@@ -771,14 +785,16 @@ class H1Multitask(LeggedRobot):
         self.task_ids[env_ids] = self.task_chain[0]
         self.task_length_buf[env_ids] = 0
         self.max_task_length[env_ids] = self.chain_max_task_length[0]
-        self.walk_to_target_done[env_ids] = False
-        self.prev_root_target_dist[env_ids] = 1e6
+        self.phase[env_ids] = self.PHASE_TURN
 
-        with torch.no_grad():
-            root_pos = self.humanoid_root_states[env_ids, :2]
-            target_pos = self._get_task_target_pos()[env_ids, :2]
-            root_target_dist = root_pos - target_pos
-            self.prev_root_target_dist[env_ids] = root_target_dist
+        target = self._get_task_target_pos()[env_ids]
+        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
+        self.prev_yaw_error[env_ids] = yaw_error.detach()
+
+        root_pos = self.humanoid_root_states[env_ids, :2]
+        target_pos = self._get_task_target_pos()[env_ids, :2]
+        root_target_dist = root_pos - target_pos
+        self.prev_root_target_dist[env_ids] = root_target_dist
 
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
@@ -820,6 +836,40 @@ class H1Multitask(LeggedRobot):
 
         return target
     
+    def get_yaw_error_to_target(root_states, target_pos):
+        """
+        root_states: [N,13]  (pos xyz + quat xyzw + ...)
+        target_pos:  [N,3]
+
+        return:
+            yaw_error: [N]  (rad, 0 -> pi)
+            signed_yaw_error: [N] (-pi -> pi)
+        """
+        root_pos = root_states[:, :3]
+        root_quat = root_states[:, 3:7]   # (x,y,z,w)
+
+        to_target = target_pos - root_pos
+        to_target[:, 2] = 0.0
+
+        to_target_norm = torch.norm(to_target[:, :2], dim=1, keepdim=True) + 1e-8
+        to_target_dir = to_target[:, :2] / to_target_norm
+        x, y, z, w = root_quat[:,0], root_quat[:,1], root_quat[:,2], root_quat[:,3]
+
+        fwd_x = 1 - 2*(y*y + z*z)
+        fwd_y = 2*(x*y + w*z)
+
+        forward = torch.stack([fwd_x, fwd_y], dim=1)
+        forward_norm = torch.norm(forward, dim=1, keepdim=True) + 1e-8
+        forward_dir = forward / forward_norm
+
+        dot = (forward_dir * to_target_dir).sum(dim=1).clamp(-1.0, 1.0)
+        yaw_error = torch.acos(dot)   # 0 → pi
+
+        cross = forward_dir[:,0]*to_target_dir[:,1] - forward_dir[:,1]*to_target_dir[:,0]
+        signed_yaw_error = torch.atan2(cross, dot)  # -pi → pi
+
+        return yaw_error, signed_yaw_error
+    
     def _get_base_to_target_dist(self):
         root_pos   = self.humanoid_root_states[:, :2]
         target_pos = self._get_task_target_pos()[:, :2]
@@ -827,6 +877,20 @@ class H1Multitask(LeggedRobot):
     
     # Task rewards
     ## Guide rewards
+    def _reward_turn_to_target(self):
+        target = self._get_task_target_pos()
+
+        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states, target)
+
+        progress = self.prev_yaw_error - yaw_error
+        self.prev_yaw_error = yaw_error.detach()
+
+        progress = torch.clamp(progress, 0.0, 0.2)
+        rew = progress / (self.dt + 1e-6)
+
+        mask = (self.phase == self.PHASE_TURN).float()
+        return mask * rew
+
     def _reward_walk_to_target(self):
         base_target_dist = self._get_base_to_target_dist()
 

@@ -2,6 +2,11 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 class H1MultitaskCfg(LeggedRobotCfg):
     class env(LeggedRobotCfg.env):
+        # Phase
+        PHASE_TURN = 0
+        PHASE_WALK = 1
+        PHASE_INTERACT = 2
+
         # Task
         num_tasks = 5
         TASK_REACH = 0
@@ -239,6 +244,7 @@ class H1MultitaskCfg(LeggedRobotCfg):
         class scales:
             # Task rewards
             ## Guide rewards
+            turn_to_target = 5.0
             walk_to_target = 5.0
             ## Task reach
             wrist_goal_distance = 5.0
