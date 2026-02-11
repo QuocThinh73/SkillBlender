@@ -100,7 +100,7 @@ class H1MultitaskCfg(LeggedRobotCfg):
         ## Small box assets
         small_box_size = 0.1
         small_box_range_x = [-0.3, 0.3]
-        small_box_range_y = [-0.45, -0.35]
+        small_box_range_y = [-0.40, -0.35]
         # Task cabinet
         ## Cabinet
         gapartnet_root = "resources/objects/gapartnet/"
