@@ -238,21 +238,21 @@ class H1MultitaskCfg(LeggedRobotCfg):
 
         class scales:
             # Task rewards
+            ## Guide rewards
+            walk_to_target = 5.0
             ## Task reach
-            ### Main reward
-            reach_total = 5.0
+            wrist_goal_distance = 5.0
             ## Task button
-            ### Main reward
-            button_total = 5.0
+            wrist_button_distance = 5.0
             ## Task cabinet
-            ### Main goal
-            cabinet_total = 5.0
+            wrist_cabinet_distance = 5.0
+            cabinet_goal_distance = 5.0
             ## Task box
-            ### Main goal
-            box_total = 5.0
+            wrist_small_box_distance = 5.0
+            small_box_goal_distance = 5.0
             ## Task ball
-            ### Main goal
-            ball_total = 5.0
+            torso_ball_distance = 2.5
+            ball_goal_distance = 5.0
 
             # Base rewards
             orientation = 1.0
@@ -271,30 +271,15 @@ class H1MultitaskCfg(LeggedRobotCfg):
             dof_vel_limits = -0.1
             torque_limits = -0.1
             stumble = -0.1
-            # stand_still = 0.0
-            # target_jt = 0.0
 
         class task_thresholds:
             reach_near = 0.45
-            reach_far  = 1.20
-
             button_near = 0.40
-            button_far  = 1.00
-
             cabinet_near = 0.60
-            cabinet_far  = 1.50
-
             box_near = 0.60
-            box_far  = 1.50
-
             ball_near = 0.70
-            ball_far  = 2.00
-
-            cabinet_hand_near = 0.15
-            cabinet_hand_far  = 0.40
-
+            cabinet_hand_near = 0.25
             ball_push_near = 0.40
-            ball_push_far  = 1.00
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False

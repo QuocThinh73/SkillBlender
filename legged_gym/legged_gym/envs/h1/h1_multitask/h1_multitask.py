@@ -38,7 +38,8 @@ class H1Multitask(LeggedRobot):
         ## Task ball
         self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Guide rewards
-        self.prev_base_obj_dist_xy = torch.zeros(self.num_envs, device=self.device)
+        self.prev_root_target_dist = torch.zeros(self.num_envs, device=self.device)
+        self.walk_to_target_done = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
         # Task conditioning
         ## Fixed chain order
@@ -700,6 +701,32 @@ class H1Multitask(LeggedRobot):
         ball_goal_dist = torch.norm(ball_goal_diff, dim=1)
         self.reset_buf |= ball_goal_dist < self.cfg.commands.ranges.threshold
 
+    def compute_reward(self):
+        """ Compute rewards
+            Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
+            adds each terms to the episode sums and to the total reward
+        """
+        self.rew_buf[:] = 0.
+
+        for i in range(len(self.reward_functions)):
+            name = self.reward_names[i]
+            rew_func_return = self.reward_functions[i]()
+            if isinstance(rew_func_return, tuple):
+                unscaled_rew, metric = rew_func_return
+                self.episode_metrics[name] = metric.mean().item()
+            else:
+                unscaled_rew = rew_func_return
+            rew = unscaled_rew * self.reward_scales[name]
+            self.rew_buf += rew
+            self.episode_sums[name] += rew
+        if self.cfg.rewards.only_positive_rewards:
+            self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
+        # add termination reward after clipping
+        if "termination" in self.reward_scales:
+            rew = self._reward_termination() * self.reward_scales["termination"]
+            self.rew_buf += rew
+            self.episode_sums["termination"] += rew
+
     def check_switch(self, env_ids):
         timeout = (self.task_length_buf[env_ids] >= self.max_task_length[env_ids])
         is_last = (self.task_ptr[env_ids] >= self.num_chain - 1)
@@ -735,7 +762,7 @@ class H1Multitask(LeggedRobot):
             base_xy = self.humanoid_root_states[env_ids, :2]
             target_xy = self._get_task_target_pos()[env_ids, :2]
             d_xy = torch.norm(target_xy - base_xy, dim=1)
-            self.prev_base_obj_dist_xy[env_ids] = d_xy.detach()
+            self.prev_root_target_dist[env_ids] = d_xy.detach()
 
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
@@ -744,12 +771,14 @@ class H1Multitask(LeggedRobot):
         self.task_ids[env_ids] = self.task_chain[0]
         self.task_length_buf[env_ids] = 0
         self.max_task_length[env_ids] = self.chain_max_task_length[0]
+        self.walk_to_target_done[env_ids] = False
+        self.prev_root_target_dist[env_ids] = 1e6
 
         with torch.no_grad():
-            base_xy = self.humanoid_root_states[env_ids, :2]
-            target_xy = self._get_task_target_pos()[env_ids, :2]
-            d_xy = torch.norm(target_xy - base_xy, dim=1)
-            self.prev_base_obj_dist_xy[env_ids] = d_xy
+            root_pos = self.humanoid_root_states[env_ids, :2]
+            target_pos = self._get_task_target_pos()[env_ids, :2]
+            root_target_dist = root_pos - target_pos
+            self.prev_root_target_dist[env_ids] = root_target_dist
 
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
@@ -791,183 +820,135 @@ class H1Multitask(LeggedRobot):
 
         return target
     
-    def _far_near_alpha(self, d_xy, d_near, d_far):
-        # far -> 1, near -> 0
-        alpha = (d_xy - d_near) / (d_far - d_near + 1e-6)
-        return torch.clamp(alpha, 0.0, 1.0)
+    def _get_base_to_target_dist(self):
+        root_pos   = self.humanoid_root_states[:, :2]
+        target_pos = self._get_task_target_pos()[:, :2]
+        return torch.norm(root_pos - target_pos, dim=1)
     
     # Task rewards
     ## Guide rewards
-    def _reward_walk_progress_to_task_target(self, near_dist, far_dist, mask=None):
-        base_xy = self.humanoid_root_states[:, :2]
-        target_xy = self._get_task_target_pos()[:, :2]
-        d_xy = torch.norm(target_xy - base_xy, dim=1)
+    def _reward_walk_to_target(self):
+        base_target_dist = self._get_base_to_target_dist()
 
-        if mask is None:
-            mask = torch.ones_like(d_xy, dtype=torch.bool)
-        else:
-            mask = mask.bool()
+        near_dist = torch.zeros_like(base_target_dist)
 
-        # progress only on masked envs
-        progress = torch.zeros_like(d_xy)
-        progress[mask] = self.prev_base_obj_dist_xy[mask] - d_xy[mask]
-        self.prev_base_obj_dist_xy[mask] = d_xy[mask].detach()
+        near_dist[self.task_ids == self.TASK_REACH]   = self.cfg.rewards.task_thresholds.reach_near
+        near_dist[self.task_ids == self.TASK_BUTTON]  = self.cfg.rewards.task_thresholds.button_near
+        near_dist[self.task_ids == self.TASK_CABINET] = self.cfg.rewards.task_thresholds.cabinet_near
+        near_dist[self.task_ids == self.TASK_BOX]     = self.cfg.rewards.task_thresholds.box_near
+        near_dist[self.task_ids == self.TASK_BALL]    = self.cfg.rewards.task_thresholds.ball_near
 
-        progress_pos = torch.clamp(progress, 0.0, 0.25)
-        alpha = self._far_near_alpha(d_xy, near_dist, far_dist)
-        rew = torch.clamp(progress_pos / (self.dt + 1e-6), 0.0, 2.0)
+        done_env_ids = base_target_dist < near_dist
+        self.walk_to_target_done |= done_env_ids
+        undone_env_ids = ~self.walk_to_target_done
 
-        return rew * mask.float(), d_xy, alpha
+        progress = torch.zeros_like(base_target_dist)
+
+        progress[undone_env_ids] = self.prev_root_target_dist[undone_env_ids] - base_target_dist[undone_env_ids]
+        
+        self.prev_root_target_dist[undone_env_ids] = base_target_dist[undone_env_ids].detach()
+
+        progress = torch.clamp(progress, 0.0, 0.25)
+
+        rew = torch.clamp(progress / (self.dt + 1e-6), 0.0, 2.0)
+
+        rew *= (~done_env_ids).float()
+
+        return rew
 
     ## Task reach
     def _reward_wrist_goal_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.reach_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         wrist_goal_pos = self.wrist_goal_pos
         wrist_goal_distance = torch.flatten(wrist_pos - wrist_goal_pos, start_dim=1)
         wrist_goal_error = torch.mean(torch.abs(wrist_goal_distance), dim=1)
         reward = torch.exp(-4 * wrist_goal_error)
         mask = self._task_mask(self.TASK_REACH)
-        return mask * reward
-    
-    ### Main reward
-    def _reward_reach_total(self):
-        mask = self._task_mask(self.TASK_REACH)
-
-        walk_rew, d_xy, alpha = self._reward_walk_progress_to_task_target(near_dist=self.cfg.rewards.task_thresholds.reach_near, far_dist=self.cfg.rewards.task_thresholds.reach_far, mask=mask)
-        reach_rew = self._reward_wrist_goal_distance()
-
-        reach_rew_raw = reach_rew / (mask + 1e-6)
-
-        total = alpha * walk_rew + (1.0 - alpha) * reach_rew_raw
-        return total
+        return mask * near.float() * reward
 
     ## Task button
     def _reward_wrist_button_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.button_near
         left_wrist_pos = self.rigid_state[:, self.wrist_indices[0], :3]
         button_goal_pos = self.button_goal_pos
         wrist_button_distance = left_wrist_pos - button_goal_pos
         wrist_button_error = torch.mean(torch.abs(wrist_button_distance), dim=1)
         reward = torch.exp(-4 * wrist_button_error)
         mask = self._task_mask(self.TASK_BUTTON)
-        return mask * reward
-    
-    ### Main reward
-    def _reward_button_total(self):
-        mask = self._task_mask(self.TASK_BUTTON)
-
-        walk_rew, d_xy, alpha_far = self._reward_walk_progress_to_task_target(near_dist=self.cfg.rewards.task_thresholds.button_near, far_dist=self.cfg.rewards.task_thresholds.button_far, mask=mask)
-
-        button_rew = self._reward_wrist_button_distance()
-        button_raw = button_rew / (mask + 1e-6)
-
-        total = alpha_far * walk_rew + (1.0 - alpha_far) * button_raw
-        return total
+        return mask * near.float() * reward
 
     ## Task cabinet
     def _reward_wrist_cabinet_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.cabinet_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         cabinet_pos = self.cabinet_root_states[:, :3]
         wrist_cabinet_distance = torch.flatten(wrist_pos - cabinet_pos.unsqueeze(1), start_dim=1)
         wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_distance), dim=1)
         reward = torch.exp(-4 * wrist_cabinet_error)
         mask = self._task_mask(self.TASK_CABINET)
-        return mask * reward
+        return mask * near.float() * reward
 
     def _reward_cabinet_goal_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.cabinet_near
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         cabinet_dof_state = self.cabinet_dof_state[:, :, 0]
         cabinet_dof_state_goal = self.cabinet_dof_goal
         cabinet_goal_distance = cabinet_dof_state - cabinet_dof_state_goal
         cabinet_goal_error = torch.mean(torch.abs(cabinet_goal_distance), dim=1)
         reward = torch.exp(-4 * cabinet_goal_error)
         mask = self._task_mask(self.TASK_CABINET)
-        return mask * reward
-    
-    ### Main reward
-    def _reward_cabinet_total(self):
-        mask = self._task_mask(self.TASK_CABINET)
-
-        walk_rew, d_xy, alpha_far = self._reward_walk_progress_to_task_target(near_dist=self.cfg.rewards.task_thresholds.cabinet_near, far_dist=self.cfg.rewards.task_thresholds.cabinet_far, mask=mask)
-
-        wrist_rew = self._reward_wrist_cabinet_distance()
-        goal_rew  = self._reward_cabinet_goal_distance()
-        wrist_raw = wrist_rew / (mask + 1e-6)
-        goal_raw  = goal_rew  / (mask + 1e-6)
-
-        manip_raw = 0.5 * wrist_raw + 0.5 * goal_raw 
-
-        total = alpha_far * walk_rew + (1.0 - alpha_far) * manip_raw
-        return total
+        return mask * near.float() * reward
 
     ## Task box
     def _reward_wrist_small_box_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.box_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         small_box_pos = self.small_box_root_states[:, :3]
         wrist_small_box_distance = torch.flatten(wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
         wrist_small_box_error = torch.mean(torch.abs(wrist_small_box_distance), dim=1)
         reward = torch.exp(-4 * wrist_small_box_error)
         mask = self._task_mask(self.TASK_BOX)
-        return mask * reward
+        return mask * near.float() * reward
 
     def _reward_small_box_goal_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.box_near
         small_box_pos = self.small_box_root_states[:, :3]
         small_box_goal_pos = self.small_box_goal_pos
         small_box_goal_distance = small_box_pos - small_box_goal_pos
         small_box_goal_error = torch.mean(torch.abs(small_box_goal_distance), dim=1)
         reward = torch.exp(-4 * small_box_goal_error) 
         mask = self._task_mask(self.TASK_BOX)
-        return mask * reward
-
-    ### Main reward
-    def _reward_box_total(self):
-        mask = self._task_mask(self.TASK_BOX)
-
-        walk_rew, d_xy, alpha = self._reward_walk_progress_to_task_target(near_dist=self.cfg.rewards.task_thresholds.box_near, far_dist=self.cfg.rewards.task_thresholds.box_far, mask=mask)
-
-        wrist_rew = self._reward_wrist_small_box_distance()
-        goal_rew  = self._reward_small_box_goal_distance()
-
-        wrist_raw = wrist_rew / (mask + 1e-6)
-        goal_raw  = goal_rew  / (mask + 1e-6)
-
-        manip_raw = 0.5 * wrist_raw + 0.5 * goal_raw
-        total = alpha * walk_rew + (1.0 - alpha) * manip_raw
-        return total
+        return mask * near.float() * reward
 
     ## Task ball
     def _reward_torso_ball_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.ball_near
         torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
         ball_pos = self.ball_root_states[:, :3]
         torso_ball_distance = (torso_pos - ball_pos)[:, :2]
         torso_ball_error = torch.mean(torch.abs(torso_ball_distance), dim=1)
         reward = torch.exp(-4 * torso_ball_error)
         mask = self._task_mask(self.TASK_BALL)
-        return mask * reward
+        return mask * near.float() * reward
 
     def _reward_ball_goal_distance(self):
+        dist = self._get_base_to_target_dist()
+        near = dist < self.cfg.rewards.task_thresholds.ball_near
         ball_pos = self.ball_root_states[:, :3]
         ball_goal_pos = self.ball_goal_pos
         ball_goal_distance = ball_pos - ball_goal_pos
         ball_goal_error = torch.mean(torch.abs(ball_goal_distance), dim=1)
         reward = torch.exp(-4 * ball_goal_error)
         mask = self._task_mask(self.TASK_BALL)
-        return mask * reward
-    
-    ### Main reward
-    def _reward_ball_total(self):
-        mask = self._task_mask(self.TASK_BALL)
-
-        walk_rew, d_xy, alpha_far = self._reward_walk_progress_to_task_target(near_dist=self.cfg.rewards.task_thresholds.ball_near, far_dist=self.cfg.rewards.task_thresholds.ball_far, mask=mask)
-
-        torso_ball_rew = self._reward_torso_ball_distance()
-        ball_goal_rew  = self._reward_ball_goal_distance()
-
-        torso_ball_raw = torso_ball_rew / (mask + 1e-6)
-        ball_goal_raw  = ball_goal_rew  / (mask + 1e-6)
-
-        manip_raw = 0.5 * torso_ball_raw + 0.5 * ball_goal_raw
-
-        total = alpha_far * walk_rew + (1.0 - alpha_far) * manip_raw
-        return total
+        return mask * near.float() * reward
 
     # Base rewards
     def _reward_orientation(self):
@@ -1071,13 +1052,3 @@ class H1Multitask(LeggedRobot):
         # Penalize feet hitting vertical surfaces
         return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) >\
              5 *torch.abs(self.contact_forces[:, self.feet_indices, 2]), dim=1)
-        
-    def _reward_stand_still(self):
-        # Penalize motion at zero commands
-        return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
-    
-    def _reward_target_jt(self):
-        # # Penalize distance to target joint angles
-        # target_jt_error = torch.mean(torch.abs(self.dof_pos - self.target_jt), dim=1)
-        # return torch.exp(-4 * target_jt_error), target_jt_error
-        return 0
