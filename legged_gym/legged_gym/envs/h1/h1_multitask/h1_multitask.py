@@ -746,7 +746,8 @@ class H1Multitask(LeggedRobot):
         if len(env_ids) == 0:
             return
         
-        yaw_error, _ = self.get_yaw_error_to_target()[env_ids]
+        yaw_error, _ = self.get_yaw_error_to_target()
+        yaw_error = yaw_error[env_ids]
         dist = self._get_base_to_target_dist()[env_ids]
         phase = self.phase[env_ids]
 
@@ -804,7 +805,8 @@ class H1Multitask(LeggedRobot):
         self.phase[env_ids] = self.PHASE_TURN
 
         target = self._get_task_target_pos()[env_ids]
-        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
+        yaw_error, _ = self.get_yaw_error_to_target()
+        yaw_error = yaw_error[env_ids]
         self.prev_yaw_error[env_ids] = yaw_error.detach()
 
     def reset_idx(self, env_ids):
@@ -817,7 +819,8 @@ class H1Multitask(LeggedRobot):
         self.phase[env_ids] = self.PHASE_TURN
 
         target = self._get_task_target_pos()[env_ids]
-        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
+        yaw_error, _ = self.get_yaw_error_to_target()
+        yaw_error = yaw_error[env_ids]
         self.prev_yaw_error[env_ids] = yaw_error.detach()
 
         for i in range(self.obs_history.maxlen):
@@ -828,7 +831,7 @@ class H1Multitask(LeggedRobot):
 # ================================================ Rewards ================================================== #
     # Helper functions
     def _task_mask(self, task_id):
-        return (self.task_ids == task_id).float()
+        return (self.task_ids == task_id)
     
     def _get_task_target_pos(self):
         """Return target world position [num_envs, 3] for current task in each env."""
@@ -904,7 +907,7 @@ class H1Multitask(LeggedRobot):
     ## Guide rewards
     def _reward_turn_to_target(self):
         target = self._get_task_target_pos()
-        yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states, target)
+        yaw_error, _ = self.get_yaw_error_to_target()
 
         progress = self.prev_yaw_error - yaw_error
         self.prev_yaw_error = yaw_error.detach()

@@ -291,12 +291,8 @@ class H1MultitaskCfg(LeggedRobotCfg):
             axis = (0, 1, 0) # camera axis
             angle = 45 # camera angle
 
-class H1MultitaskCfgPPO(LeggedRobotCfgPPO):
-    pass
 
-from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
-
-class H1MultitaskCfg(LeggedRobotCfg):
+class H1MultitaskCfgPPO(LeggedRobotCfg):
     seed = 5
     runner_class_name = 'OnPolicyRunner'   # DWLOnPolicyRunner
 
@@ -352,7 +348,7 @@ class H1MultitaskCfg(LeggedRobotCfg):
 
         # logging
         save_interval = 1000  # check for potential saves every this many iterations
-        experiment_name = 'h1_task_box'
+        experiment_name = 'h1_multi_task'
         run_name = ''
         # load and resume
         resume = False
