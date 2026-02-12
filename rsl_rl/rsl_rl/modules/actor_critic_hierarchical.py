@@ -38,6 +38,8 @@ from copy import deepcopy
 from legged_gym.utils.helpers import class_to_dict
 import os
 from legged_gym import LEGGED_GYM_ROOT_DIR
+from rsl_rl.utils.activation_utils import Sparsemax
+
 
 class ActorCriticHierarchical(nn.Module):
     is_recurrent = False
@@ -106,6 +108,8 @@ class ActorCriticHierarchical(nn.Module):
         # seems that we get better performance without init
         # self.init_memory_weights(self.memory_a, 0.001, 0.)
         # self.init_memory_weights(self.memory_c, 0.001, 0.)
+
+        self.sparsemax = Sparsemax(dim=1)
 
     @staticmethod
     # not used at the moment
@@ -215,7 +219,8 @@ class ActorCriticHierarchical(nn.Module):
             mask = mask_to_low_level_policies[:, i*self.num_dofs:(i+1)*self.num_dofs]
             masks.append(mask)
         masks = torch.stack(masks, dim=1) # [4096, num_skills, 19]
-        masks = torch.softmax(masks, dim=1) # [4096, num_skills, 19]
+        # masks = torch.softmax(masks, dim=1) # [4096, num_skills, 19]
+        masks = self.sparsemax(masks)
         means = []
         for i in range(self.num_skills):
             prev_command_dim_sum = sum([self.env_cfg_list[j].env.command_dim for j in range(i)])
