@@ -278,14 +278,9 @@ class H1MultitaskCfg(LeggedRobotCfg):
             torque_limits = -0.1
             stumble = -0.1
 
-        class task_thresholds:
-            reach_near = 0.45
-            button_near = 0.40
-            cabinet_near = 0.60
-            box_near = 0.60
-            ball_near = 0.70
-            cabinet_hand_near = 0.25
-            ball_push_near = 0.40
+        class phase_thresholds:
+            turn_threshold = 0.2
+            walk_threshold = 0.8
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False

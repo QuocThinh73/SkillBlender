@@ -904,7 +904,6 @@ class H1Multitask(LeggedRobot):
     ## Guide rewards
     def _reward_turn_to_target(self):
         target = self._get_task_target_pos()
-
         yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states, target)
 
         progress = self.prev_yaw_error - yaw_error
@@ -919,112 +918,91 @@ class H1Multitask(LeggedRobot):
     def _reward_walk_to_target(self):
         base_target_dist = self._get_base_to_target_dist()
 
-        progress = torch.zeros_like(base_target_dist)
-
         progress = self.prev_root_target_dist - base_target_dist
-        
         self.prev_root_target_dist = base_target_dist.detach()
 
         progress = torch.clamp(progress, 0.0, 0.25)
-
-        rew = torch.clamp(progress / (self.dt + 1e-6), 0.0, 2.0)
+        rew = progress / (self.dt + 1e-6)
 
         mask = (self.phase == self.PHASE_WALK)
         return mask * rew
 
     ## Task reach
     def _reward_wrist_goal_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.reach_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         wrist_goal_pos = self.wrist_goal_pos
         wrist_goal_distance = torch.flatten(wrist_pos - wrist_goal_pos, start_dim=1)
         wrist_goal_error = torch.mean(torch.abs(wrist_goal_distance), dim=1)
         reward = torch.exp(-4 * wrist_goal_error)
-        mask = self._task_mask(self.TASK_REACH)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_REACH) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     ## Task button
     def _reward_wrist_button_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.button_near
         left_wrist_pos = self.rigid_state[:, self.wrist_indices[0], :3]
         button_goal_pos = self.button_goal_pos
         wrist_button_distance = left_wrist_pos - button_goal_pos
         wrist_button_error = torch.mean(torch.abs(wrist_button_distance), dim=1)
         reward = torch.exp(-4 * wrist_button_error)
-        mask = self._task_mask(self.TASK_BUTTON)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_BUTTON)  & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     ## Task cabinet
     def _reward_wrist_cabinet_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.cabinet_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         cabinet_pos = self.cabinet_root_states[:, :3]
         wrist_cabinet_distance = torch.flatten(wrist_pos - cabinet_pos.unsqueeze(1), start_dim=1)
         wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_distance), dim=1)
         reward = torch.exp(-4 * wrist_cabinet_error)
-        mask = self._task_mask(self.TASK_CABINET)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_CABINET) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     def _reward_cabinet_goal_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.cabinet_near
-        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         cabinet_dof_state = self.cabinet_dof_state[:, :, 0]
         cabinet_dof_state_goal = self.cabinet_dof_goal
         cabinet_goal_distance = cabinet_dof_state - cabinet_dof_state_goal
         cabinet_goal_error = torch.mean(torch.abs(cabinet_goal_distance), dim=1)
         reward = torch.exp(-4 * cabinet_goal_error)
-        mask = self._task_mask(self.TASK_CABINET)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_CABINET) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     ## Task box
     def _reward_wrist_small_box_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.box_near
         wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
         small_box_pos = self.small_box_root_states[:, :3]
         wrist_small_box_distance = torch.flatten(wrist_pos - small_box_pos.unsqueeze(1), start_dim=1)
         wrist_small_box_error = torch.mean(torch.abs(wrist_small_box_distance), dim=1)
         reward = torch.exp(-4 * wrist_small_box_error)
-        mask = self._task_mask(self.TASK_BOX)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_BOX) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     def _reward_small_box_goal_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.box_near
         small_box_pos = self.small_box_root_states[:, :3]
         small_box_goal_pos = self.small_box_goal_pos
         small_box_goal_distance = small_box_pos - small_box_goal_pos
         small_box_goal_error = torch.mean(torch.abs(small_box_goal_distance), dim=1)
         reward = torch.exp(-4 * small_box_goal_error) 
-        mask = self._task_mask(self.TASK_BOX)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_BOX) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     ## Task ball
     def _reward_torso_ball_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.ball_near
         torso_pos = self.rigid_state[:, self.torso_indices, :3].squeeze(1)
         ball_pos = self.ball_root_states[:, :3]
         torso_ball_distance = (torso_pos - ball_pos)[:, :2]
         torso_ball_error = torch.mean(torch.abs(torso_ball_distance), dim=1)
         reward = torch.exp(-4 * torso_ball_error)
-        mask = self._task_mask(self.TASK_BALL)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_BALL) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     def _reward_ball_goal_distance(self):
-        dist = self._get_base_to_target_dist()
-        near = dist < self.cfg.rewards.task_thresholds.ball_near
         ball_pos = self.ball_root_states[:, :3]
         ball_goal_pos = self.ball_goal_pos
         ball_goal_distance = ball_pos - ball_goal_pos
         ball_goal_error = torch.mean(torch.abs(ball_goal_distance), dim=1)
         reward = torch.exp(-4 * ball_goal_error)
-        mask = self._task_mask(self.TASK_BALL)
-        return mask * near.float() * reward
+        mask = self._task_mask(self.TASK_BALL) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
 
     # Base rewards
     def _reward_orientation(self):
