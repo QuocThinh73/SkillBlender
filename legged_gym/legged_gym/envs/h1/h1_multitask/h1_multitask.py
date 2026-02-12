@@ -743,7 +743,41 @@ class H1Multitask(LeggedRobot):
         self.reset_buf[env_ids] |= timeout & is_last
 
     def update_phase(self, env_ids):
-        pass
+        if len(env_ids) == 0:
+            return
+        
+        yaw_error, _ = self.get_yaw_error_to_target()[env_ids]
+        dist = self._get_base_to_target_dist()[env_ids]
+        phase = self.phase[env_ids]
+
+        turn_threshold = self.cfg.rewards.phase_thresholds.turn_threshold
+        walk_threshold = self.cfg.rewards.phase_thresholds.walk_threshold
+
+        # Turn -> walk
+        turn_done = yaw_error < turn_threshold
+        turn_to_walk = (phase == self.PHASE_TURN) & turn_done
+
+        if turn_to_walk.any():
+            walk_env_ids = env_ids[turn_to_walk]
+            self.prev_root_target_dist[walk_env_ids] = dist[turn_to_walk].detach()
+
+        phase = torch.where(
+            turn_to_walk,
+            torch.full_like(phase, self.PHASE_WALK),
+            phase
+        )
+
+        # Walk -> interact
+        walk_done = dist < walk_threshold
+        walk_to_interact = (phase == self.PHASE_WALK) & walk_done
+        phase = torch.where(
+            walk_to_interact,
+            torch.full_like(phase, self.PHASE_INTERACT),
+            phase
+        )
+
+        # Update phases
+        self.phase[env_ids] = phase
 
     def switch_idx(self, env_ids):
         if len(env_ids) == 0:
@@ -773,11 +807,6 @@ class H1Multitask(LeggedRobot):
         yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
         self.prev_yaw_error[env_ids] = yaw_error.detach()
 
-        root_pos = self.humanoid_root_states[env_ids, :2]
-        target_pos = self._get_task_target_pos()[env_ids, :2]
-        root_target_dist = torch.norm(root_pos - target_pos, dim=1)
-        self.prev_root_target_dist[env_ids] = root_target_dist.detach()
-
     def reset_idx(self, env_ids):
         super().reset_idx(env_ids)
 
@@ -790,11 +819,6 @@ class H1Multitask(LeggedRobot):
         target = self._get_task_target_pos()[env_ids]
         yaw_error, _ = self.get_yaw_error_to_target(self.humanoid_root_states[env_ids], target)
         self.prev_yaw_error[env_ids] = yaw_error.detach()
-
-        root_pos = self.humanoid_root_states[env_ids, :2]
-        target_pos = self._get_task_target_pos()[env_ids, :2]
-        root_target_dist = root_pos - target_pos
-        self.prev_root_target_dist[env_ids] = root_target_dist
 
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
@@ -836,7 +860,7 @@ class H1Multitask(LeggedRobot):
 
         return target
     
-    def get_yaw_error_to_target(root_states, target_pos):
+    def get_yaw_error_to_target(self):
         """
         root_states: [N,13]  (pos xyz + quat xyzw + ...)
         target_pos:  [N,3]
@@ -845,9 +869,10 @@ class H1Multitask(LeggedRobot):
             yaw_error: [N]  (rad, 0 -> pi)
             signed_yaw_error: [N] (-pi -> pi)
         """
-        root_pos = root_states[:, :3]
-        root_quat = root_states[:, 3:7]   # (x,y,z,w)
+        root_pos = self.humanoid_root_states[:, :3]
+        root_quat = self.humanoid_root_states[:, 3:7]   # (x,y,z,w)
 
+        target_pos = self._get_task_target_pos()
         to_target = target_pos - root_pos
         to_target[:, 2] = 0.0
 
@@ -888,37 +913,24 @@ class H1Multitask(LeggedRobot):
         progress = torch.clamp(progress, 0.0, 0.2)
         rew = progress / (self.dt + 1e-6)
 
-        mask = (self.phase == self.PHASE_TURN).float()
+        mask = (self.phase == self.PHASE_TURN)
         return mask * rew
 
     def _reward_walk_to_target(self):
         base_target_dist = self._get_base_to_target_dist()
 
-        near_dist = torch.zeros_like(base_target_dist)
-
-        near_dist[self.task_ids == self.TASK_REACH]   = self.cfg.rewards.task_thresholds.reach_near
-        near_dist[self.task_ids == self.TASK_BUTTON]  = self.cfg.rewards.task_thresholds.button_near
-        near_dist[self.task_ids == self.TASK_CABINET] = self.cfg.rewards.task_thresholds.cabinet_near
-        near_dist[self.task_ids == self.TASK_BOX]     = self.cfg.rewards.task_thresholds.box_near
-        near_dist[self.task_ids == self.TASK_BALL]    = self.cfg.rewards.task_thresholds.ball_near
-
-        done_env_ids = base_target_dist < near_dist
-        self.walk_to_target_done |= done_env_ids
-        undone_env_ids = ~self.walk_to_target_done
-
         progress = torch.zeros_like(base_target_dist)
 
-        progress[undone_env_ids] = self.prev_root_target_dist[undone_env_ids] - base_target_dist[undone_env_ids]
+        progress = self.prev_root_target_dist - base_target_dist
         
-        self.prev_root_target_dist[undone_env_ids] = base_target_dist[undone_env_ids].detach()
+        self.prev_root_target_dist = base_target_dist.detach()
 
         progress = torch.clamp(progress, 0.0, 0.25)
 
         rew = torch.clamp(progress / (self.dt + 1e-6), 0.0, 2.0)
 
-        rew *= (~done_env_ids).float()
-
-        return rew
+        mask = (self.phase == self.PHASE_WALK)
+        return mask * rew
 
     ## Task reach
     def _reward_wrist_goal_distance(self):
