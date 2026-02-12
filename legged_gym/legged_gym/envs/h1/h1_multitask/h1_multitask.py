@@ -29,6 +29,7 @@ class H1Multitask(LeggedRobot):
         self.TASK_CABINET = cfg.env.TASK_CABINET
         self.TASK_BOX = cfg.env.TASK_BOX
         self.TASK_BALL = cfg.env.TASK_BALL
+        self.TASK_CARRY = cfg.env.TASK_CARRY
         self.task_ids = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
         # Goals
@@ -42,6 +43,8 @@ class H1Multitask(LeggedRobot):
         self.small_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Task ball
         self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        ## Task carry
+        self.big_box_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
         ## Guide rewards
         self.prev_yaw_error = torch.zeros(self.num_envs, device=self.device)
         self.prev_root_target_dist = torch.zeros(self.num_envs, device=self.device)
@@ -49,7 +52,7 @@ class H1Multitask(LeggedRobot):
         # Task conditioning
         ## Fixed chain order
         self.task_chain = torch.tensor(
-            [self.TASK_REACH, self.TASK_BUTTON, self.TASK_CABINET, self.TASK_BOX, self.TASK_BALL],
+            [self.TASK_REACH, self.TASK_BUTTON, self.TASK_CABINET, self.TASK_BOX, self.TASK_BALL, self.TASK_CARRY],
             device=self.device, dtype=torch.long
         )
         self.num_chain = self.task_chain.numel()
@@ -60,6 +63,7 @@ class H1Multitask(LeggedRobot):
             np.ceil(self.cfg.env.cabinet_length_s / self.dt),
             np.ceil(self.cfg.env.box_length_s / self.dt),
             np.ceil(self.cfg.env.ball_length_s / self.dt),
+            np.ceil(self.cfg.env.carry_length_s / self.dt),
         ], device=self.device, dtype=torch.long)
         ## Buffers for switch task
         self.task_ptr = torch.zeros(self.num_envs, device=self.device, dtype=torch.long) 
@@ -225,6 +229,13 @@ class H1Multitask(LeggedRobot):
         cabinet_dof_props["friction"].fill(0.0)
         cabinet_pose = gymapi.Transform()
         self.cabinet_idxs = []
+        ## Task carry
+        ### Big box assets
+        big_box_size = self.cfg.asset.big_box_size
+        asset_options = gymapi.AssetOptions()
+        big_box_asset = self.gym.create_box(self.sim, big_box_size[0], big_box_size[1], big_box_size[2], asset_options)
+        big_box_pose = gymapi.Transform()
+        self.big_box_idxs = []
 
         for i in range(self.num_envs):
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
@@ -292,12 +303,28 @@ class H1Multitask(LeggedRobot):
             self.gym.set_actor_dof_states(env_handle, cabinet_handle, cabinet_default_dof_state, gymapi.STATE_ALL)
             self.gym.set_actor_scale(env_handle, cabinet_handle, self.cfg.asset.cabinet_scale)
             self.cabinet_idxs.append(self.gym.get_actor_index(env_handle, cabinet_handle, gymapi.DOMAIN_SIM))
+            ## Task carry
+            big_box_offsets = self.cfg.asset.big_box_offset_xy
+            big_box_pose.p.x = pos[0] + big_box_offsets[0]
+            big_box_pose.p.y = pos[1] + big_box_offsets[1]
+            big_box_pose.p.z = pos[2] + 0.5 * big_box_size[2]
+            big_box_handle = self.gym.create_actor(env_handle, big_box_asset, big_box_pose, "big_box", i, 0)
+            big_box_rigid_body_props = self.gym.get_actor_rigid_body_properties(env_handle, big_box_handle)
+            for prop in big_box_rigid_body_props:
+                prop.mass = random.uniform(*self.cfg.asset.big_box_range_mass) # change mass here!
+            self.gym.set_actor_rigid_body_properties(env_handle, big_box_handle, big_box_rigid_body_props, recomputeInertia=True)
+            big_box_rigid_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, big_box_handle)
+            for prop in big_box_rigid_shape_props:
+                prop.friction = 5. # change friction here!
+            self.gym.set_actor_rigid_shape_properties(env_handle, big_box_handle, big_box_rigid_shape_props)
+            self.big_box_idxs.append(self.gym.get_actor_index(env_handle, big_box_handle, gymapi.DOMAIN_SIM))
         
         self.humanoid_idxs = torch.tensor(self.humanoid_idxs, device=self.device, dtype=torch.long)
         self.ball_idxs = torch.tensor(self.ball_idxs, device=self.device, dtype=torch.long)
         self.small_box_idxs = torch.tensor(self.small_box_idxs, device=self.device, dtype=torch.long)
         self.cabinet_idxs = torch.tensor(self.cabinet_idxs, device=self.device, dtype=torch.long)
-            
+        self.big_box_idxs = torch.tensor(self.big_box_idxs, device=self.device, dtype=torch.long)
+
         # Common body parts
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):
@@ -355,6 +382,7 @@ class H1Multitask(LeggedRobot):
         self.ball_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.ball_idxs[0]]
         self.small_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.small_box_idxs[0]]
         self.cabinet_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.cabinet_idxs[0]]
+        self.big_box_root_states = self.root_states.view(self.num_envs, -1, 13)[:, self.big_box_idxs[0]]
         self.humanoid_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, :self.num_dof]
         self.cabinet_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_dof:]
 
@@ -462,11 +490,11 @@ class H1Multitask(LeggedRobot):
         self.small_box_goal_pos[env_ids, 0] = self.small_box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_x).to(self.device)
         self.small_box_goal_pos[env_ids, 1] = self.small_box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.small_box_y).to(self.device)
         self.small_box_goal_pos[env_ids, 2] = self.small_box_root_states[env_ids, 2]
-        # Task button
+        # Reset button goal
         self.button_goal_pos[env_ids, 0] = pos[:, 0] + self.cfg.asset.wall_offsets[0]
         self.button_goal_pos[env_ids, 1] = pos[:, 1] + self.cfg.asset.wall_offsets[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_goal_y).to(self.device)
         self.button_goal_pos[env_ids, 2] = self.cfg.asset.button_ori_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.button_goal_z).to(self.device)
-        # Task reach
+        # Reset wrist reach goal
         center_x = pos[:, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_x).to(self.device)
         center_y = pos[:, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_y).to(self.device)
         center_z = pos[:, 2] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.center_goal_z).to(self.device)
@@ -476,24 +504,35 @@ class H1Multitask(LeggedRobot):
         self.wrist_goal_pos[env_ids, 1, 0] = center_x + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_x).to(self.device)
         self.wrist_goal_pos[env_ids, 1, 1] = center_y + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_y).to(self.device)
         self.wrist_goal_pos[env_ids, 1, 2] = center_z + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.offset_z).to(self.device)
-
+        # Reset big box root states
+        self.big_box_root_states[env_ids, 0] = pos[:, 0] + self.cfg.asset.big_box_offset_xy[0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.big_box_range_x).to(self.device)
+        self.big_box_root_states[env_ids, 1] = pos[:, 1] + self.cfg.asset.big_box_offset_xy[1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.asset.big_box_range_y).to(self.device)
+        self.big_box_root_states[env_ids, 2] = 0.5 * self.cfg.asset.big_box_size[2]
+        self.big_box_root_states[env_ids, 3] = 1
+        self.big_box_root_states[env_ids, 4:] = 0
+        # Reset big box goal
+        self.big_box_goal_pos[env_ids, 0] = self.big_box_root_states[env_ids, 0] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_x).to(self.device)
+        self.big_box_goal_pos[env_ids, 1] = self.big_box_root_states[env_ids, 1] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_y).to(self.device)
+        self.big_box_goal_pos[env_ids, 2] = self.big_box_root_states[env_ids, 2] + torch.FloatTensor(len(env_ids)).uniform_(*self.cfg.commands.ranges.big_box_pos_z).to(self.device)
 
         humanoid_ids_int32 = self.humanoid_idxs[env_ids].to(torch.int32)
         ball_ids_int32 = self.ball_idxs[env_ids].to(torch.int32)
         small_box_ids_int32 = self.small_box_idxs[env_ids].to(torch.int32)
+        big_box_ids_int32 = self.big_box_idxs[env_ids].to(torch.int32)
 
         ids = torch.cat(
             [
                 humanoid_ids_int32,
                 ball_ids_int32,
-                small_box_ids_int32
+                small_box_ids_int32,
+                big_box_ids_int32
             ]
         )
 
         self.gym.set_actor_root_state_tensor_indexed(
             self.sim,
             gymtorch.unwrap_tensor(self.root_states),
-            gymtorch.unwrap_tensor(ids), 
+            gymtorch.unwrap_tensor(ids),
             len(ids)
         )
 
@@ -552,6 +591,12 @@ class H1Multitask(LeggedRobot):
         torso_ball_dist_obs = humanoid_torso_pos - ball_pos
         ball_goal_pos = self.ball_goal_pos
         ball_goal_dist_obs = ball_pos - ball_goal_pos
+        ## Task carry
+        big_box_pos = self.big_box_root_states[:, :3]
+        wrist_big_box_dist_obs = torch.flatten(humanoid_wrist_pos - big_box_pos.unsqueeze(1), start_dim=1)
+        big_box_goal_pos = self.big_box_goal_pos
+        big_box_goal_dist_obs = big_box_pos - big_box_goal_pos
+
         task_obs_buf = torch.cat((
             ## Task reach
             wrist_goal_pos_dist_obs,                # 6
@@ -566,6 +611,9 @@ class H1Multitask(LeggedRobot):
             ## Task ball
             torso_ball_dist_obs,                    # 3
             ball_goal_dist_obs,                     # 3
+            ## Task carry
+            wrist_big_box_dist_obs,                 # 6
+            big_box_goal_dist_obs                   # 3
         ), dim=-1)
 
         task_privileged_obs_buf = torch.cat((
@@ -589,7 +637,12 @@ class H1Multitask(LeggedRobot):
             ball_pos,                                       # 3
             torso_ball_dist_obs,                            # 3
             ball_goal_pos,                                  # 3
-            ball_goal_dist_obs                              # 3
+            ball_goal_dist_obs,                             # 3
+            ## Task carry
+            big_box_pos,                                    # 3
+            wrist_big_box_dist_obs,                         # 6
+            big_box_goal_pos,                               # 3
+            big_box_goal_dist_obs,                          # 3
         ), dim=-1)
 
         # Phase observations
@@ -804,7 +857,6 @@ class H1Multitask(LeggedRobot):
         self.switch_buf[env_ids] = False
         self.phase[env_ids] = self.PHASE_TURN
 
-        target = self._get_task_target_pos()[env_ids]
         yaw_error, _ = self.get_yaw_error_to_target()
         yaw_error = yaw_error[env_ids]
         self.prev_yaw_error[env_ids] = yaw_error.detach()
@@ -818,7 +870,6 @@ class H1Multitask(LeggedRobot):
         self.max_task_length[env_ids] = self.chain_max_task_length[0]
         self.phase[env_ids] = self.PHASE_TURN
 
-        target = self._get_task_target_pos()[env_ids]
         yaw_error, _ = self.get_yaw_error_to_target()
         yaw_error = yaw_error[env_ids]
         self.prev_yaw_error[env_ids] = yaw_error.detach()
@@ -906,7 +957,6 @@ class H1Multitask(LeggedRobot):
     # Task rewards
     ## Guide rewards
     def _reward_turn_to_target(self):
-        target = self._get_task_target_pos()
         yaw_error, _ = self.get_yaw_error_to_target()
 
         progress = self.prev_yaw_error - yaw_error
@@ -1005,6 +1055,25 @@ class H1Multitask(LeggedRobot):
         ball_goal_error = torch.mean(torch.abs(ball_goal_distance), dim=1)
         reward = torch.exp(-4 * ball_goal_error)
         mask = self._task_mask(self.TASK_BALL) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
+    
+    ## Task carry
+    def _reward_wrist_big_box_distance(self):
+        wrist_pos = self.rigid_state[:, self.wrist_indices, :3]
+        big_box_pos = self.big_box_root_states[:, :3]
+        wrist_big_box_distance = torch.flatten(wrist_pos - big_box_pos.unsqueeze(1), start_dim=1)
+        wrist_big_box_error = torch.mean(torch.abs(wrist_big_box_distance), dim=1)
+        reward = torch.exp(-4 * wrist_big_box_error)
+        mask = self._task_mask(self.TASK_CARRY) & (self.phase == self.PHASE_INTERACT)
+        return mask * reward
+
+    def _reward_big_box_goal_distance(self):
+        big_box_pos = self.big_box_root_states[:, :3]
+        big_box_goal_pos = self.big_box_goal_pos
+        big_box_goal_distance = big_box_pos - big_box_goal_pos
+        big_box_goal_error = torch.mean(torch.abs(big_box_goal_distance), dim=1)
+        reward = torch.exp(-4 * big_box_goal_error) 
+        mask = self._task_mask(self.TASK_BOX) & (self.phase == self.PHASE_INTERACT)
         return mask * reward
 
     # Base rewards

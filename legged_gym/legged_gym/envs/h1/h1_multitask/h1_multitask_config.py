@@ -8,24 +8,25 @@ class H1MultitaskCfg(LeggedRobotCfg):
         PHASE_INTERACT = 2
 
         # Task
-        num_tasks = 5
+        num_tasks = 6
         TASK_REACH = 0
         TASK_BUTTON = 1
         TASK_CABINET = 2
         TASK_BOX = 3
         TASK_BALL = 4
+        TASK_LIFT = 5
 
         # Observation
         num_actions = 19
         frame_stack = 1
         c_frame_stack = 3
         num_proprioception_obs = 3 * num_actions + 9
-        num_task_obs = 32
+        num_task_obs = 41
         num_phase_obs = num_tasks
         num_single_obs = num_proprioception_obs + num_task_obs + num_phase_obs # see `obs_buf = torch.cat(...)` for details
         num_observations = int(frame_stack * num_single_obs)
         num_proprioception_privileged_obs = 3 * num_actions + 18
-        num_task_privileged_obs = 62
+        num_task_privileged_obs = 77
         num_phase_privileged_obs = num_tasks
         num_single_privileged_obs = num_proprioception_privileged_obs + num_task_privileged_obs + num_phase_privileged_obs
         num_privileged_obs = int(c_frame_stack * num_single_privileged_obs)
@@ -36,12 +37,13 @@ class H1MultitaskCfg(LeggedRobotCfg):
         env_spacing = 10.0
 
         # Episode length
-        reach_length_s = 8.0
+        reach_length_s = 6.0
         button_length_s = 8.0
         cabinet_length_s = 8.0
         box_length_s = 12.0
         ball_length_s = 12.0
-        episode_length_s = reach_length_s + button_length_s + cabinet_length_s + box_length_s + ball_length_s
+        carry_length_s = 12.0
+        episode_length_s = reach_length_s + button_length_s + cabinet_length_s + box_length_s + ball_length_s + carry_length_s
 
     class asset(LeggedRobotCfg.asset):
         file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/h1/urdf/h1_wrist.urdf"
@@ -107,12 +109,19 @@ class H1MultitaskCfg(LeggedRobotCfg):
         small_box_range_x = [-0.3, 0.3]
         small_box_range_y = [-0.40, -0.35]
         # Task cabinet
-        ## Cabinet
+        ## Cabinet assets
         gapartnet_root = "resources/objects/gapartnet/"
         gapartnet_id = 45159
         cabinet_offsets = [0, -2.0, 1.0]
         cabinet_dof_default = 1.0
         cabinet_scale = 0.5
+        # Task carry
+        ## Big box assets
+        big_box_size = [0.5, 0.1, 1.0]
+        big_box_offset_xy = [1.0, 0.0]
+        big_box_range_x = [-0.5, -0.3]
+        big_box_range_y = [-0.05, 0.05]
+        big_box_range_mass = [0.1, 2.0]
 
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = 'plane'
@@ -229,6 +238,10 @@ class H1MultitaskCfg(LeggedRobotCfg):
             offset_x = [-0.15, 0.15]
             offset_y = [-0.15, 0.15]
             offset_z = [-0.1, 0.1]
+            # Task carry
+            big_box_pos_x = [0.3, 1.0]
+            big_box_pos_y = [-0.3, 0.3]
+            big_box_pos_z = [0.3, 0.6]
 
     class rewards:
         min_dist = 0.05
@@ -259,6 +272,9 @@ class H1MultitaskCfg(LeggedRobotCfg):
             ## Task ball
             torso_ball_distance = 2.5
             ball_goal_distance = 5.0
+            ## Task carry
+            wrist_big_box_distance = 5.0
+            big_box_goal_distance = 5.0
 
             # Base rewards
             orientation = 1.0
