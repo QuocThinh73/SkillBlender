@@ -2,7 +2,10 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 
 
 class H1UnifiedTaskCfg(LeggedRobotCfg):
-    class task():
+    class human(LeggedRobotCfg.human):
+        freq = 1
+
+    class env(LeggedRobotCfg.env):
         TASK_BALL = 0
         TASK_BOX = 1
         TASK_BUTTON = 2
@@ -11,20 +14,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         TASK_LIFT = 5
         TASK_REACH = 6
         TASK_TRANSFER = 7
-
-        # TASK_BUTTON = 0
-        # TASK_CABINET = 1
-        # TASK_REACH = 2
-        # TASK_BALL = 3
-        # TASK_BOX = 4
-        # TASK_CARRY = 5
-        # TASK_LIFT = 6
-        # TASK_TRANSFER = 7
-
-    class human(LeggedRobotCfg.human):
-        freq = 1
-
-    class env(LeggedRobotCfg.env):
+        
         # change the observation dim
         num_tasks = 8
         num_actions = 19
@@ -37,7 +27,15 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_envs = 4096
+        num_task_ball_envs = 1
+        num_task_box_envs = 1
+        num_task_button_envs = 1
+        num_task_cabinet_envs = 1
+        num_task_carry_envs = 1
+        num_task_lift_envs = 1
+        num_task_reach_envs = 1
+        num_task_transfer_envs = 1
+        num_envs = num_task_ball_envs + num_task_box_envs + num_task_button_envs + num_task_cabinet_envs + num_task_carry_envs + num_task_lift_envs + num_task_reach_envs + num_task_transfer_envs
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
         env_spacing = 10.0
