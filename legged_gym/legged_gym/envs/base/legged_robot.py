@@ -83,35 +83,117 @@ class LeggedRobot(BaseTask):
         self._prepare_reward_function()
         self.init_done = True
 
+    # def _get_noise_scale_vec(self, cfg):
+    #     """ Sets a vector used to scale the noise added to the observations.
+    #         [NOTE]: Must be adapted when changing the observations structure
+
+    #     Args:
+    #         cfg (Dict): Environment config file
+
+    #     Returns:
+    #         [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
+    #     """
+    #     noise_vec = torch.zeros(
+    #         self.cfg.env.num_single_obs, device=self.device)
+    #     self.add_noise = self.cfg.noise.add_noise
+    #     noise_scales = self.cfg.noise.noise_scales
+    #     noise_level = self.cfg.noise.noise_level
+    #     num_dof = self.cfg.env.num_actions
+
+    #     noise_vec[-3:] = noise_scales.quat * noise_level * \
+    #         self.obs_scales.quat  # base euler xyz
+    #     noise_vec[-6:-3] = noise_scales.ang_vel * noise_level * \
+    #         self.obs_scales.ang_vel  # base ang vel (omega)
+    #     noise_vec[-6-num_dof:-6] = 0.  # previous actions
+    #     noise_vec[-6-2*num_dof:-6-num_dof] = noise_scales.dof_vel * \
+    #         noise_level * self.obs_scales.dof_vel  # dof vel (dq)
+    #     noise_vec[-6-3*num_dof:-6-2*self.num_dof] = noise_scales.dof_pos * \
+    #         noise_level * self.obs_scales.dof_pos  # dof pos (q)
+    #     noise_vec[:-6-3*num_dof] = 0.  # command
+
+    #     assert -6 - self.cfg.env.num_tasks - 3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
+    #     return noise_vec
+
     def _get_noise_scale_vec(self, cfg):
-        """ Sets a vector used to scale the noise added to the observations.
-            [NOTE]: Must be adapted when changing the observations structure
-
-        Args:
-            cfg (Dict): Environment config file
-
-        Returns:
-            [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
         """
-        noise_vec = torch.zeros(
-            self.cfg.env.num_single_obs, device=self.device)
-        self.add_noise = self.cfg.noise.add_noise
+        Sets a vector used to scale the noise added to the observations.
+        Must match the exact layout in compute_observations().
+        """
+
+        device = self.device
+        num_dof = self.cfg.env.num_actions
+        command_dim = self.cfg.env.command_dim
+        num_tasks = self.cfg.env.num_tasks
+
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
-        num_dof = self.cfg.env.num_actions
+        self.add_noise = self.cfg.noise.add_noise
 
-        noise_vec[-3:] = noise_scales.quat * noise_level * \
-            self.obs_scales.quat  # base euler xyz
-        noise_vec[-6:-3] = noise_scales.ang_vel * noise_level * \
-            self.obs_scales.ang_vel  # base ang vel (omega)
-        noise_vec[-6-num_dof:-6] = 0.  # previous actions
-        noise_vec[-6-2*num_dof:-6-num_dof] = noise_scales.dof_vel * \
-            noise_level * self.obs_scales.dof_vel  # dof vel (dq)
-        noise_vec[-6-3*num_dof:-6-2*self.num_dof] = noise_scales.dof_pos * \
-            noise_level * self.obs_scales.dof_pos  # dof pos (q)
-        noise_vec[:-6-3*num_dof] = 0.  # command
+        # total obs dim BEFORE frame stacking
+        total_dim = (
+            command_dim +
+            3 * num_dof +
+            6 +
+            num_tasks
+        )
 
-        assert -6 - self.cfg.env.num_tasks - 3*num_dof + self.cfg.env.num_single_obs == self.cfg.env.command_dim
+        noise_vec = torch.zeros(total_dim, device=device)
+
+        start = 0
+
+        # ------------------------------------------------------------------
+        # 1. task_specific_obs (command_dim) → NO noise
+        start += command_dim
+
+        # ------------------------------------------------------------------
+        # 2. q (dof_pos)
+        noise_vec[start:start + num_dof] = (
+            noise_scales.dof_pos *
+            noise_level *
+            self.obs_scales.dof_pos
+        )
+        start += num_dof
+
+        # ------------------------------------------------------------------
+        # 3. dq (dof_vel)
+        noise_vec[start:start + num_dof] = (
+            noise_scales.dof_vel *
+            noise_level *
+            self.obs_scales.dof_vel
+        )
+        start += num_dof
+
+        # ------------------------------------------------------------------
+        # 4. previous actions → NO noise
+        start += num_dof
+
+        # ------------------------------------------------------------------
+        # 5. base_ang_vel (3)
+        noise_vec[start:start + 3] = (
+            noise_scales.ang_vel *
+            noise_level *
+            self.obs_scales.ang_vel
+        )
+        start += 3
+
+        # ------------------------------------------------------------------
+        # 6. base_euler_xyz (3)
+        noise_vec[start:start + 3] = (
+            noise_scales.quat *
+            noise_level *
+            self.obs_scales.quat
+        )
+        start += 3
+
+        # ------------------------------------------------------------------
+        # 7. task_one_hot → NO noise
+        start += num_tasks
+
+        # ------------------------------------------------------------------
+        # Final safety check
+        assert start == total_dim, \
+            f"Noise vector indexing mismatch: {start} vs {total_dim}"
+
         return noise_vec
 
     def step(self, actions):

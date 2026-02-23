@@ -27,14 +27,14 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_task_ball_envs = 1
-        num_task_box_envs = 1
-        num_task_button_envs = 1
-        num_task_cabinet_envs = 1
-        num_task_carry_envs = 1
-        num_task_lift_envs = 1
-        num_task_reach_envs = 1
-        num_task_transfer_envs = 1
+        num_task_ball_envs = 256
+        num_task_box_envs = 512
+        num_task_button_envs = 256
+        num_task_cabinet_envs = 256
+        num_task_carry_envs = 512
+        num_task_lift_envs = 512
+        num_task_reach_envs = 256
+        num_task_transfer_envs = 1536
         num_envs = num_task_ball_envs + num_task_box_envs + num_task_button_envs + num_task_cabinet_envs + num_task_carry_envs + num_task_lift_envs + num_task_reach_envs + num_task_transfer_envs
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
@@ -259,18 +259,37 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         max_contact_force = 700  # forces above this value are penalized
 
         class scales:
-            torso_ori_ball_distance = 1
-            ball_goal_distance = 5
-            small_box_goal_distance = 5
-            wrist_small_box_distance = 5
-            wrist_button_distance = 5
+            # Task Ball (0)
+            torso_ball_distance = 1.0
+            ball_goal_distance = 5.0
+            
+            # Task Box (1)
+            box_goal_distance = 5.0
+            wrist_box_distance = 5.0
+            
+            # Task Button (2)
+            wrist_button_distance = 5.0
             right_arm_default = 0.5
-            torso_cabinet_distance = 5
-            wrist_cabinet_distance = 5
-            cabinet_dof_goal = 5
-            big_box_goal_distance = 5
-            wrist_big_box_distance = 5
-            wrist_ref_wrist_distance = 5
+            
+            # Task Cabinet (3)
+            torso_cabinet_distance = 5.0
+            wrist_cabinet_distance = 5.0
+            cabinet_dof_goal = 5.0
+            
+            # Task Carry (4)
+            carry_goal_distance = 5.0
+            wrist_carry_box_distance = 5.0
+            
+            # Task Lift (5)
+            lift_goal_distance = 5.0
+            wrist_lift_box_distance = 5.0
+            
+            # Task Reach (6)
+            wrist_ref_wrist_distance = 5.0
+            
+            # Task Transfer (7)
+            transfer_goal_distance = 5.0
+            wrist_transfer_box_distance = 5.0
 
     class sensor(LeggedRobotCfg.sensor):
         enable_sensor = False
@@ -320,6 +339,8 @@ class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
                 "low_high": (-1, 1)
             }
         }
+        task_specific_obs_dims = [6, 9, 3, 8, 9, 9, 14, 9] 
+        task_specific_priv_obs_dims = [15, 21, 9, 8, 21, 21, 42, 21]
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
         entropy_coef = 0.001
@@ -330,10 +351,10 @@ class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
         num_mini_batches = 4
 
     class runner:
-        policy_class_name = 'ActorCriticHierarchical'
+        policy_class_name = 'MultiActorCriticHierarchical'
         algorithm_class_name = 'PPO'
         num_steps_per_env = 60  # per iteration
-        max_iterations = 15001 # 3001  # number of policy updates
+        max_iterations = 100001 # 3001  # number of policy updates
 
         # logging
         save_interval = 1000  # check for potential saves every this many iterations

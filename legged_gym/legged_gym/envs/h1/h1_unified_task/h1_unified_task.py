@@ -15,37 +15,6 @@ from legged_gym.utils.human import sample_int_from_float, sample_rp
 
 
 class H1UnifiedTask(LeggedRobot):
-    '''
-    Args:
-        cfg (LeggedRobotCfg): Configuration object for the legged robot.
-        sim_params: Parameters for the simulation.
-        physics_engine: Physics engine used in the simulation.
-        sim_device: Device used for the simulation.
-        headless: Flag indicating whether the simulation should be run in headless mode.
-
-    Attributes:
-        last_feet_z (float): The z-coordinate of the last feet position.
-        feet_height (torch.Tensor): Tensor representing the height of the feet.
-        sim (gymtorch.GymSim): The simulation object.
-        terrain (HumanoidTerrain): The terrain object.
-        up_axis_idx (int): The index representing the up axis.
-        command_input (torch.Tensor): Tensor representing the command input.
-        privileged_obs_buf (torch.Tensor): Tensor representing the privileged observations buffer.
-        obs_buf (torch.Tensor): Tensor representing the observations buffer.
-        obs_history (collections.deque): Deque containing the history of observations.
-        critic_history (collections.deque): Deque containing the history of critic observations.
-
-    Methods:
-        _push_robots(): Randomly pushes the robots by setting a randomized base velocity.
-        _get_phase(): Calculates the phase of the gait cycle.
-        _get_gait_phase(): Calculates the gait phase.
-        create_sim(): Creates the simulation, terrain, and environments.
-        _get_noise_scale_vec(cfg): Sets a vector used to scale the noise added to the observations.
-        step(actions): Performs a simulation step with the given actions.
-        compute_observations(): Computes the observations.
-        reset_idx(env_ids): Resets the environment for the specified environment IDs.
-    '''
-
     def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
         self.cfg = cfg
@@ -1327,36 +1296,53 @@ class H1UnifiedTask(LeggedRobot):
             self.small_box_goal_pos[transfer_env_ids, 2] = self.small_box_root_states[transfer_env_ids, 2]
         
     def reset_idx(self, env_ids):
+        temp_episode_logs = {}
+        if len(env_ids) > 0:
+            for key in self.episode_sums.keys():
+                # Lọc ra: trong số các env đang reset, env nào thuộc task này?
+                active_mask = self.episode_masks[key]
+                valid_env_ids = env_ids[active_mask[env_ids]]
+                
+                # Chỉ tính trung bình cho các env có thực hiện task
+                if len(valid_env_ids) > 0:
+                    mean_rew = torch.mean(self.episode_sums[key][valid_env_ids]) / self.max_episode_length_s
+                    temp_episode_logs['rew_' + key] = mean_rew
+                    
         super().reset_idx(env_ids)
         self._sample_goals(env_ids)
         for i in range(self.obs_history.maxlen):
             self.obs_history[i][env_ids] *= 0
         for i in range(self.critic_history.maxlen):
             self.critic_history[i][env_ids] *= 0
+        
+        if len(env_ids) > 0:
+            if "episode" not in self.extras:
+                self.extras["episode"] = {}
+            # Cập nhật các log đã cất tạm ở bước 1 vào extras
+            self.extras["episode"].update(temp_episode_logs)
 
 # ================================================ Rewards ================================================== #
 
-    def _reward_torso_ori_ball_distance(self):
+    # ---------------- TASK 0: BALL ---------------- #
+    def _reward_torso_ball_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_BALL)
 
         if torch.any(mask):
-            torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) # [envs, 3]
-            torso_ori_ball_pos_diff = self.ori_ball_pos[mask] - torso_pos
-            torso_ori_ball_pos_diff = torso_ori_ball_pos_diff[:, :2] # only xy
-            torso_ori_ball_pos_error = torch.mean(torch.abs(torso_ori_ball_pos_diff), dim=1)
+            torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) 
+            torso_ball_pos_diff = self.ball_root_states[mask, :3] - torso_pos
+            torso_ball_pos_diff = torso_ball_pos_diff[:, :2] # only xy
+            torso_ball_pos_error = torch.mean(torch.abs(torso_ball_pos_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * torso_ori_ball_pos_error)
-            error[mask] = torso_ori_ball_pos_error
+            reward[mask] = torch.exp(-4 * torso_ball_pos_error)
+            error[mask] = torso_ball_pos_error
 
         return reward, error, mask
     
     def _reward_ball_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_BALL)
 
         if torch.any(mask):
@@ -1368,51 +1354,49 @@ class H1UnifiedTask(LeggedRobot):
 
         return reward, error, mask
 
-    def _reward_small_box_goal_distance(self):
+    # ---------------- TASK 1: BOX ---------------- #
+    def _reward_box_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
-        mask = (self.task_ids == self.cfg.env.TASK_BOX) | (self.task_ids == self.cfg.env.TASK_TRANSFER)
+        mask = (self.task_ids == self.cfg.env.TASK_BOX)
 
         if torch.any(mask):
-            small_box_pos_diff = self.small_box_root_states[mask, :3] - self.small_box_goal_pos[mask]
-            small_box_pos_error = torch.mean(torch.abs(small_box_pos_diff), dim=1)
+            box_pos_diff = self.small_box_root_states[mask, :3] - self.small_box_goal_pos[mask]
+            box_pos_error = torch.mean(torch.abs(box_pos_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * small_box_pos_error)
-            error[mask] = small_box_pos_error
+            reward[mask] = torch.exp(-4 * box_pos_error)
+            error[mask] = box_pos_error
 
         return reward, error, mask
 
-    def _reward_wrist_small_box_distance(self):
+    def _reward_wrist_box_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
-        mask = (self.task_ids == self.cfg.env.TASK_BOX) | (self.task_ids == self.cfg.env.TASK_TRANSFER)
+        mask = (self.task_ids == self.cfg.env.TASK_BOX)
 
         if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
-            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            small_box_pos = self.small_box_root_states[mask, :3] # [num_envs, 3]
-            wrist_small_box_diff = wrist_pos - small_box_pos.unsqueeze(1) # [num_envs, 2, 3]
-            wrist_small_box_diff = torch.flatten(wrist_small_box_diff, start_dim=1) # [num_envs, 6]
-            wrist_small_box_error = torch.mean(torch.abs(wrist_small_box_diff), dim=1)
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] # [num_envs, 2, 3]
+            box_pos = self.small_box_root_states[mask, :3] 
+            wrist_box_diff = wrist_pos - box_pos.unsqueeze(1) 
+            wrist_box_diff = torch.flatten(wrist_box_diff, start_dim=1) 
+            wrist_box_error = torch.mean(torch.abs(wrist_box_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * wrist_small_box_error)
-            error[mask] = wrist_small_box_error
+            reward[mask] = torch.exp(-4 * wrist_box_error)
+            error[mask] = wrist_box_error
 
         return reward, error, mask
 
+    # ---------------- TASK 2: BUTTON ---------------- #
     def _reward_wrist_button_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_BUTTON)
 
         if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
-            wrist_pos = wrist_pos[:, 0, :3] # [num_envs, 3], left hand, position only
-            button_goal_pos = self.button_goal_pos[mask, :3] # [num_envs, 3]
-            wrist_button_diff = wrist_pos - button_goal_pos # [num_envs, 3]
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3]
+            wrist_pos_left = wrist_pos[:, 0, :] # left hand
+            button_goal_pos = self.button_goal_pos[mask, :3] 
+            wrist_button_diff = wrist_pos_left - button_goal_pos 
             wrist_button_error = torch.mean(torch.abs(wrist_button_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * wrist_button_error)
@@ -1421,18 +1405,14 @@ class H1UnifiedTask(LeggedRobot):
         return reward, error, mask
 
     def _reward_right_arm_default(self):
-        """
-        Calculates the reward for keeping right arm joint positions close to default positions.
-        """
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_BUTTON)
 
         if torch.any(mask):
             right_shoulder_pitch_index = 15
             joint_diff = self.dof_pos[mask] - self.default_joint_pd_target
-            right_arm_diff = joint_diff[:, right_shoulder_pitch_index:] # start from right shoulder pitch
+            right_arm_diff = joint_diff[:, right_shoulder_pitch_index:] 
             right_arm_error = torch.mean(torch.abs(right_arm_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * right_arm_error)
@@ -1440,35 +1420,33 @@ class H1UnifiedTask(LeggedRobot):
 
         return reward, error, mask
 
+    # ---------------- TASK 3: CABINET ---------------- #
     def _reward_torso_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_CABINET)
 
         if torch.any(mask):
-            torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) # [num_envs, 3]
-            cabinet_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
-            torso_cabinet_diff = cabinet_pos - torso_pos # [num_envs, 3]
-            torso_cabinet_distance = torch.norm(torso_cabinet_diff, dim=1) # [num_envs]
-            torso_cabinet_distance[torso_cabinet_distance < 0.1] = 0 # ignore small distance
+            torso_pos = self.rigid_state[mask][:, self.torso_indices, :3].squeeze(1) 
+            cabinet_pos = self.cabinet_root_states[mask, :3] 
+            torso_cabinet_diff = cabinet_pos - torso_pos 
+            torso_cabinet_error = torch.mean(torch.abs(torso_cabinet_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * torso_cabinet_distance)
-            error[mask] = torso_cabinet_distance
+            reward[mask] = torch.exp(-4 * torso_cabinet_error)
+            error[mask] = torso_cabinet_error
 
         return reward, error, mask
 
     def _reward_wrist_cabinet_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_CABINET)
     
         if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] # [num_envs, 2, 3], two hands
-            cabinet_pos = self.cabinet_root_states[mask, :3] # [num_envs, 3]
-            wrist_cabinet_diff = wrist_pos - cabinet_pos.unsqueeze(1) # [num_envs, 2, 3]
-            wrist_cabinet_diff = torch.flatten(wrist_cabinet_diff, start_dim=1) # [num_envs, 6]
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] 
+            cabinet_pos = self.cabinet_root_states[mask, :3] 
+            wrist_cabinet_diff = wrist_pos - cabinet_pos.unsqueeze(1) 
+            wrist_cabinet_diff = torch.flatten(wrist_cabinet_diff, start_dim=1) 
             wrist_cabinet_error = torch.mean(torch.abs(wrist_cabinet_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * wrist_cabinet_error)
@@ -1477,16 +1455,12 @@ class H1UnifiedTask(LeggedRobot):
         return reward, error, mask
 
     def _reward_cabinet_dof_goal(self):
-        """
-        Calculates the reward based on the difference between the current cabinet dof positions and the target dof positions.
-        """
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_CABINET)
     
         if torch.any(mask):
-            cabinet_dof_diff = self.cabinet_dof_state[mask][:, :, 0] - self.cabinet_dof_goal # [num_envs, 2]
+            cabinet_dof_diff = self.cabinet_dof_state[mask][:, :, 0] - self.cabinet_dof_goal 
             cabinet_dof_error = torch.mean(torch.abs(cabinet_dof_diff), dim=1)
 
             reward[mask] = torch.exp(-4 * cabinet_dof_error)
@@ -1494,69 +1468,119 @@ class H1UnifiedTask(LeggedRobot):
 
         return reward, error, mask
     
-    def _reward_big_box_goal_distance(self):
+    # ---------------- TASK 4: CARRY ---------------- #
+    def _reward_carry_goal_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
-        carry_mask = (self.task_ids == self.cfg.env.TASK_CARRY)
-        lift_mask = (self.task_ids == self.cfg.env.TASK_LIFT)
-    
-        if torch.any(carry_mask):
-            big_box_pos_diff = self.big_box_root_states[carry_mask, :3] - self.big_box_goal_pos[carry_mask]
-            big_box_pos_error = torch.mean(torch.abs(big_box_pos_diff), dim=1)
-
-            reward[carry_mask] = torch.exp(-4 * big_box_pos_error)
-            error[carry_mask] = big_box_pos_error
-
-        if torch.any(lift_mask):
-            big_box_pos_diff = self.big_box_root_states[lift_mask, :3] - self.big_box_goal_pos[lift_mask]
-            big_box_pos_diff = big_box_pos_diff[:, 2:3] # only z axis
-            big_box_pos_error = torch.mean(torch.abs(big_box_pos_diff), dim=1)
-
-            reward[lift_mask] = torch.exp(-4 * big_box_pos_error)
-            error[lift_mask] = big_box_pos_error
-
-        return reward, error, carry_mask | lift_mask
-
-    def _reward_wrist_big_box_distance(self):
-        reward = torch.zeros(self.num_envs, device=self.device)
-        error = torch.zeros(self.num_envs, device=self.device)
-
-        mask = (self.task_ids == self.cfg.env.TASK_CARRY) | (self.task_ids == self.cfg.env.TASK_LIFT)
+        mask = (self.task_ids == self.cfg.env.TASK_CARRY)
     
         if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
-            wrist_pos = wrist_pos[:,:,:3] # [num_envs, 2, 3], two hands, position only
-            big_box_pos = self.big_box_root_states[mask, :3] # [num_envs, 3]
-            big_box_handle_left = big_box_pos.clone()
-            big_box_handle_right = big_box_pos.clone()
-            # box_handle_left[:, 1] += 0.4 * self.cfg.asset.box_size[1]
-            # box_handle_left[:, 2] += 0.25 * self.cfg.asset.box_size[2]
-            # box_handle_right[:, 1] -= 0.4 * self.cfg.asset.box_size[1]
-            # box_handle_right[:, 2] += 0.25 * self.cfg.asset.box_size[2]
-            big_box_handle_pos = torch.stack([big_box_handle_left, big_box_handle_right], dim=1) # [num_envs, 2, 3]
-            wrist_big_box_diff = wrist_pos - big_box_handle_pos # [num_envs, 2, 3]
-            wrist_pos_diff = torch.flatten(wrist_big_box_diff, start_dim=1) # [num_envs, 6]
-            wrist_big_box_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+            carry_pos_diff = self.big_box_root_states[mask, :3] - self.big_box_goal_pos[mask]
+            carry_pos_error = torch.mean(torch.abs(carry_pos_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * wrist_big_box_error)
-            error[mask] = wrist_big_box_error
+            reward[mask] = torch.exp(-4 * carry_pos_error)
+            error[mask] = carry_pos_error
 
         return reward, error, mask
+
+    def _reward_wrist_carry_box_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+        mask = (self.task_ids == self.cfg.env.TASK_CARRY)
     
+        if torch.any(mask):
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] 
+            big_box_pos = self.big_box_root_states[mask, :3] 
+            # Giả định tạm thời không dùng offset, hoặc bạn tự thêm offset như trước
+            big_box_handle_pos = torch.stack([big_box_pos, big_box_pos], dim=1) 
+            wrist_carry_diff = wrist_pos - big_box_handle_pos 
+            wrist_carry_diff = torch.flatten(wrist_carry_diff, start_dim=1) 
+            wrist_carry_error = torch.mean(torch.abs(wrist_carry_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * wrist_carry_error)
+            error[mask] = wrist_carry_error
+
+        return reward, error, mask
+
+    # ---------------- TASK 5: LIFT ---------------- #
+    def _reward_lift_goal_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+        mask = (self.task_ids == self.cfg.env.TASK_LIFT)
+    
+        if torch.any(mask):
+            lift_pos_diff = self.big_box_root_states[mask, :3] - self.big_box_goal_pos[mask]
+            lift_pos_diff = lift_pos_diff[:, 2:3] # only z axis
+            lift_pos_error = torch.mean(torch.abs(lift_pos_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * lift_pos_error)
+            error[mask] = lift_pos_error
+
+        return reward, error, mask
+
+    def _reward_wrist_lift_box_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+        mask = (self.task_ids == self.cfg.env.TASK_LIFT)
+    
+        if torch.any(mask):
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] 
+            big_box_pos = self.big_box_root_states[mask, :3] 
+            big_box_handle_pos = torch.stack([big_box_pos, big_box_pos], dim=1) 
+            wrist_lift_diff = wrist_pos - big_box_handle_pos 
+            wrist_lift_diff = torch.flatten(wrist_lift_diff, start_dim=1) 
+            wrist_lift_error = torch.mean(torch.abs(wrist_lift_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * wrist_lift_error)
+            error[mask] = wrist_lift_error
+
+        return reward, error, mask
+
+    # ---------------- TASK 6: REACH ---------------- #
     def _reward_wrist_ref_wrist_distance(self):
         reward = torch.zeros(self.num_envs, device=self.device)
         error = torch.zeros(self.num_envs, device=self.device)
-
         mask = (self.task_ids == self.cfg.env.TASK_REACH)
     
         if torch.any(mask):
-            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :7] # [num_envs, 2, 7], two hands
-            wrist_pos_diff = wrist_pos[:,:,:3] - self.ref_wrist_pos[mask][:,:,:3] # [num_envs, 2, 3], two hands, position only
-            wrist_pos_diff = torch.flatten(wrist_pos_diff, start_dim=1) # [num_envs, 6]
-            wrist_pos_error = torch.mean(torch.abs(wrist_pos_diff), dim=1)
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] 
+            wrist_ref_diff = wrist_pos - self.ref_wrist_pos[mask][:,:,:3] 
+            wrist_ref_diff = torch.flatten(wrist_ref_diff, start_dim=1) 
+            wrist_ref_error = torch.mean(torch.abs(wrist_ref_diff), dim=1)
 
-            reward[mask] = torch.exp(-4 * wrist_pos_error)
-            error[mask] = wrist_pos_error
+            reward[mask] = torch.exp(-4 * wrist_ref_error)
+            error[mask] = wrist_ref_error
+
+        return reward, error, mask
+
+    # ---------------- TASK 7: TRANSFER ---------------- #
+    def _reward_transfer_goal_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+        mask = (self.task_ids == self.cfg.env.TASK_TRANSFER)
+
+        if torch.any(mask):
+            transfer_pos_diff = self.small_box_root_states[mask, :3] - self.small_box_goal_pos[mask]
+            transfer_pos_error = torch.mean(torch.abs(transfer_pos_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * transfer_pos_error)
+            error[mask] = transfer_pos_error
+
+        return reward, error, mask
+
+    def _reward_wrist_transfer_box_distance(self):
+        reward = torch.zeros(self.num_envs, device=self.device)
+        error = torch.zeros(self.num_envs, device=self.device)
+        mask = (self.task_ids == self.cfg.env.TASK_TRANSFER)
+
+        if torch.any(mask):
+            wrist_pos = self.rigid_state[mask][:, self.wrist_indices, :3] 
+            box_pos = self.small_box_root_states[mask, :3] 
+            wrist_transfer_diff = wrist_pos - box_pos.unsqueeze(1) 
+            wrist_transfer_diff = torch.flatten(wrist_transfer_diff, start_dim=1) 
+            wrist_transfer_error = torch.mean(torch.abs(wrist_transfer_diff), dim=1)
+
+            reward[mask] = torch.exp(-4 * wrist_transfer_error)
+            error[mask] = wrist_transfer_error
 
         return reward, error, mask
