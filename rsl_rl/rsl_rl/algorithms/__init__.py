@@ -28,4 +28,5 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-from .ppo import PPO
+# from .ppo import PPO
+from .multi_ppo import PPO
