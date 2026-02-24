@@ -200,14 +200,12 @@ class OnPolicyRunner:
         ep_string = f''
         wandb_dict = {}
         if locs['ep_infos']:
-            # Lấy tất cả các keys (tên reward) có xuất hiện trong đợt reset này
             all_rew_keys = set().union(*(d.keys() for d in locs['ep_infos']))
             for key in all_rew_keys:
                 infotensor = torch.tensor([], device=self.device)
                 for ep_info in locs['ep_infos']:
-                    if key in ep_info: # Kiểm tra xem key có trong dict này không
+                    if key in ep_info:
                         val = ep_info[key]
-                        # handle scalar and zero dimensional tensor infos
                         if not isinstance(val, torch.Tensor):
                             val = torch.Tensor([val])
                         if len(val.shape) == 0:
@@ -219,7 +217,6 @@ class OnPolicyRunner:
                     wandb_dict['Episode/' + key] = value
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
         if locs['ep_metrics']:
-            # Lấy tất cả các keys (tên error) có xuất hiện trong batch này
             all_keys = set().union(*(d.keys() for d in locs['ep_metrics']))
             for key in all_keys:
                 info = [ep_metric[key] for ep_metric in locs['ep_metrics'] if key in ep_metric]
@@ -240,10 +237,8 @@ class OnPolicyRunner:
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
         wandb_dict['Std/mean_std'] = mean_std
-        # log all dim of the std
         for i, std in enumerate(self.alg.actor_critic.std):
             wandb_dict[f'Std/std_dim_{i}'] = std
-        # 1. Log reward và episode length cho từng task lên W&B và chuẩn bị chuỗi in Terminal
         num_tasks = self.env.cfg.env.num_tasks
         task_log_string = ""
         
@@ -257,15 +252,15 @@ class OnPolicyRunner:
                 wandb_dict[f'Train_Reward/Task_{t_id}'] = mean_rew
                 wandb_dict[f'Train_EpLen/Task_{t_id}'] = mean_len
                 
-                # Nối thêm vào chuỗi để in ra Terminal
                 task_log_string += f"""{f'Task {t_id} Reward / EpLen:':>{pad}} {mean_rew:.2f} / {mean_len:.2f}\n"""
 
         wandb_dict['Train/dones'] = statistics.mean(locs['donebuffer']) if len(locs['donebuffer']) > 0 else 0.0
+
+        if wandb.run is not None:
+            wandb.log(wandb_dict, step=locs['it'])
         
-        # Chuẩn bị chuỗi in iteration
         iter_str = f" \033[1m Learning iteration {locs['it']}/{self.tot_iter} \033[0m "
         
-        # 2. In ra Terminal
         log_string = (f"""{'#' * width}\n"""
                       f"""{iter_str.center(width, ' ')}\n\n"""
                       f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs['collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
@@ -273,11 +268,9 @@ class OnPolicyRunner:
                       f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
                       f"""{'Mean action noise std:':>{pad}} {mean_std:.2f}\n""")
         
-        # Chèn chuỗi thông tin của từng task vào Terminal
         if task_log_string:
             log_string += task_log_string
 
-        # Chèn thêm các Errors/Metrics
         log_string += ep_string
         
         eta = self.tot_time / (locs['it'] + 1 - self.start_iter) * (locs['num_learning_iterations'] - (locs['it'] - self.start_iter))
