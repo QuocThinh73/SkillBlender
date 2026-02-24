@@ -45,7 +45,6 @@ class H1UnifiedTask(LeggedRobot):
         self.feet_height = torch.zeros((self.num_envs, 2), device=self.device)
 
         # Task ball
-        self.ori_ball_pos = torch.zeros(self.num_envs, 3, device=self.device)
         self.ball_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
         door_z_offsets = [offset[2] for offset in self.cfg.asset.door_offsets]
@@ -855,11 +854,9 @@ class H1UnifiedTask(LeggedRobot):
         
         pos = self.env_origins[active_ids].clone()
 
-        self.ori_ball_pos[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
-        self.ori_ball_pos[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
-        self.ori_ball_pos[active_ids, 2] = 0.5 * self.cfg.asset.ball_size
-
-        self.ball_root_states[active_ids, :3] = self.ori_ball_pos[active_ids].clone()
+        self.ball_root_states[active_ids, 0] = pos[:, 0] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_x).to(self.device)
+        self.ball_root_states[active_ids, 1] = pos[:, 1] + torch.FloatTensor(len(active_ids)).uniform_(*self.cfg.asset.ball_range_y).to(self.device)
+        self.ball_root_states[active_ids, 2] = 0.5 * self.cfg.asset.ball_size
         self.ball_root_states[active_ids, 3] = 1
         self.ball_root_states[active_ids, 4:] = 0
 
