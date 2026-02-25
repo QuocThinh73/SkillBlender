@@ -1231,12 +1231,24 @@ class H1UnifiedTask(LeggedRobot):
         self.privileged_obs_buf = torch.cat([self.critic_history[i] for i in range(self.cfg.env.c_frame_stack)], dim=1)
 
     def check_termination(self):
-        """ Check if environments need to be reset
-        """
-        self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
+        """ Check if environments need to be reset """
+        # 1. (Cũ) Reset nếu các bộ phận cấm chạm vào vật (Giờ danh sách này rỗng nên nó sẽ luôn False)
+        if len(self.termination_contact_indices) > 0:
+            self.reset_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
+        else:
+            self.reset_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        # 2. ---> (MỚI) KIỂM TRA NGÃ DỰA VÀO CHIỀU CAO <---
+        # H1 cao khoảng 1.0m, nếu base (pelvis/torso) tụt xuống dưới 0.45m tức là đã ngã bò ra đất
+        base_height = self.humanoid_root_states[:, 2]
+        fall_mask = base_height < 0.2
+        self.reset_buf |= fall_mask
+
+        # 3. Timeout
         self.time_out_buf = self.episode_length_buf > self.max_episode_length
         self.reset_buf |= self.time_out_buf
 
+        # 4. Task Ball Goal Threshold
         is_ball_task = (self.task_ids == self.cfg.env.TASK_BALL)
         ball_pos = self.ball_root_states[:, :3]
         ball_goal_dist = torch.norm(ball_pos - self.ball_goal_pos, dim=1)

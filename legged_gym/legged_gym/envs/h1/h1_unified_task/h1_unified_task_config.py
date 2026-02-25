@@ -27,14 +27,14 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         single_num_privileged_obs = 3 * num_actions + 18 + num_tasks + max_privileged_obs_dim
         num_privileged_obs = int(c_frame_stack * single_num_privileged_obs)
         
-        num_task_ball_envs = 256
+        num_task_ball_envs = 512
         num_task_box_envs = 512
-        num_task_button_envs = 256
-        num_task_cabinet_envs = 256
+        num_task_button_envs = 512
+        num_task_cabinet_envs = 512
         num_task_carry_envs = 512
         num_task_lift_envs = 512
-        num_task_reach_envs = 256
-        num_task_transfer_envs = 1536
+        num_task_reach_envs = 512
+        num_task_transfer_envs = 512
         num_envs = num_task_ball_envs + num_task_box_envs + num_task_button_envs + num_task_cabinet_envs + num_task_carry_envs + num_task_lift_envs + num_task_reach_envs + num_task_transfer_envs
         episode_length_s = 8  # episode length in seconds
         use_ref_actions = False
@@ -52,7 +52,8 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         torso_name = "torso"
         wrist_name = "wrist"
 
-        terminate_after_contacts_on = ['pelvis', 'torso', 'shoulder', 'elbow', 'hip']
+        # terminate_after_contacts_on = ['pelvis', 'torso', 'shoulder', 'elbow', 'hip']
+        terminate_after_contacts_on = []
         penalize_contacts_on = ["hip", 'knee', 'pelvis', 'torso', 'shoulder', 'elbow']
         self_collisions = 0  # 1 to disable, 0 to enable...bitwise filter
         flip_visual_attachments = False
@@ -357,7 +358,7 @@ class H1UnifiedTaskCfgPPO(LeggedRobotCfgPPO):
         max_iterations = 100001 # 3001  # number of policy updates
 
         # logging
-        save_interval = 1000  # check for potential saves every this many iterations
+        save_interval = 500  # check for potential saves every this many iterations
         experiment_name = 'h1_unified_task'
         run_name = ''
         # load and resume

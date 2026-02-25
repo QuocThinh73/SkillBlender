@@ -1,47 +1,13 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
 import time
 import os
 from collections import deque
 import statistics
 
-# from torch.utils.tensorboard import SummaryWriter
 import torch
 import numpy as np
 
 from rsl_rl.algorithms import PPO
 from rsl_rl.modules import *
-
-# from rsl_rl.env import VecEnv
-import IPython; e = IPython.embed
 
 import wandb
 
@@ -63,15 +29,15 @@ class OnPolicyRunner:
             num_critic_obs = self.env.num_privileged_obs 
         else:
             num_critic_obs = self.env.num_obs
-        ############################################################################################################
+            
         self.use_vision = self.env.cfg.sensor.enable_sensor
-        ############################################################################################################
+        
         actor_critic_class = eval(self.cfg["policy_class_name"]) # ActorCritic
-        # if self.env has attribute obs_context_len
         if hasattr(self.env, 'obs_context_len'):
             obs_context_len = self.env.obs_context_len
         else:
             obs_context_len = 1
+            
         args = kwargs['args']
         actor_critic = actor_critic_class( 
             self.env.num_obs,
@@ -83,6 +49,7 @@ class OnPolicyRunner:
             device=self.device,
             args=args,
         ).to(self.device)
+        
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
         self.alg = alg_class(
             actor_critic, device=self.device, **self.alg_cfg)
@@ -94,6 +61,7 @@ class OnPolicyRunner:
             obs_vision_shape = [obs_context_len, 3, self.env.cfg.sensor.camera.height, self.env.cfg.sensor.camera.width] if obs_context_len != 1 else [3, self.env.cfg.sensor.camera.height, self.env.cfg.sensor.camera.width]
         else:
             obs_vision_shape = None
+            
         obs_shape = [obs_context_len, self.env.num_obs] if obs_context_len != 1 else [self.env.num_obs]
         self.task_ids = self.env.task_ids
         self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, obs_shape, obs_vision_shape, [self.env.num_privileged_obs], [self.env.num_actions], task_ids=self.task_ids)
@@ -109,18 +77,16 @@ class OnPolicyRunner:
 
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
-        # # initialize writer
-        # if self.log_dir is not None and self.writer is None:
-        #     self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
         if init_at_random_ep_len:
             self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
         obs = self.env.get_observations()
         if self.use_vision:
             obs_vision = self.env.get_visual_observations().to(self.device)
+            
         privileged_obs = self.env.get_privileged_observations()
         critic_obs = privileged_obs if privileged_obs is not None else obs
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
-        self.alg.actor_critic.train() # switch to train mode (for dropout for example)
+        self.alg.actor_critic.train()
 
         ep_infos = []
         ep_metrics = []
@@ -131,7 +97,7 @@ class OnPolicyRunner:
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
-        self.tot_iter = self.current_learning_iteration + num_learning_iterations # starting from current and train for num_learning_iterations
+        self.tot_iter = self.current_learning_iteration + num_learning_iterations 
         self.start_iter = self.current_learning_iteration
         
         for it in range(self.start_iter, self.tot_iter):
@@ -143,9 +109,12 @@ class OnPolicyRunner:
                         actions = self.alg.act((obs, obs_vision), (critic_obs, obs_vision), task_ids=self.task_ids)
                     else:
                         actions = self.alg.act(obs, critic_obs, task_ids=self.task_ids)
+
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
+                    
                     if self.use_vision:
                         obs_vision = self.env.get_visual_observations().to(self.device)
+                        
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
                     self.alg.process_env_step(rewards, dones, infos)
@@ -158,12 +127,13 @@ class OnPolicyRunner:
                             ep_metrics.append(infos['episode_metrics'])
                         cur_reward_sum += rewards
                         cur_episode_length += 1
-                        new_ids = (dones > 0).nonzero(as_tuple=False)
+                        
                         new_ids = (dones > 0).nonzero(as_tuple=False).flatten()
                         for env_id in new_ids:
                             t_id = self.task_ids[env_id].item()
                             rewbuffer_per_task[t_id].append(cur_reward_sum[env_id].item())
                             lenbuffer_per_task[t_id].append(cur_episode_length[env_id].item())
+                            
                         donebuffer.append(len(new_ids) / self.env.num_envs)
                         cur_reward_sum[new_ids] = 0
                         cur_episode_length[new_ids] = 0
@@ -178,11 +148,25 @@ class OnPolicyRunner:
                 else:
                     self.alg.compute_returns(critic_obs, task_ids=self.task_ids)
             
-            mean_value_loss, mean_surrogate_loss = self.alg.update()
+            mean_value_loss_dict, mean_surrogate_loss_dict = self.alg.update() # Giả định update trả về dict theo task
             stop = time.time()
             learn_time = stop - start
+            
+            # Cập nhật Temperature Annealing cho Gumbel Softmax
+            if hasattr(self.alg.actor_critic, 'update_tau'):
+                self.alg.actor_critic.update_tau()
+                
             if self.log_dir is not None:
+                # Do hàm log lấy 'mean_value_loss' từ locals(), 
+                # ta cần tạo 2 biến giả để truyền xuống log in Terminal cho không bị lỗi nếu update trả về dict
+                if isinstance(mean_value_loss_dict, dict):
+                    mean_value_loss = sum(mean_value_loss_dict.values()) / max(1, len([v for v in mean_value_loss_dict.values() if v > 0]))
+                    mean_surrogate_loss = sum(mean_surrogate_loss_dict.values()) / max(1, len([v for v in mean_surrogate_loss_dict.values() if v != 0]))
+                else:
+                    mean_value_loss = mean_value_loss_dict
+                    mean_surrogate_loss = mean_surrogate_loss_dict
                 self.log(locals())
+                
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
@@ -216,6 +200,7 @@ class OnPolicyRunner:
                     value = torch.mean(infotensor)
                     wandb_dict['Episode/' + key] = value
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
+                    
         if locs['ep_metrics']:
             all_keys = set().union(*(d.keys() for d in locs['ep_metrics']))
             for key in all_keys:
@@ -224,21 +209,40 @@ class OnPolicyRunner:
                     value = np.mean(info)
                     wandb_dict['Error/' + key] = value
                     ep_string += f"""{f'Mean error {key}:':>{pad}} {value:.4f}\n"""
+                    
         std = self.alg.actor_critic.std.cpu().detach().numpy()
         mean_std = std.mean()
         entropy = self.alg.actor_critic.entropy.detach().mean().item()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
+        # Log Loss (Nếu update trả về dict, đã được trung bình hóa ở bước learn)
         wandb_dict['Loss/value_function'] = locs['mean_value_loss']
         wandb_dict['Loss/surrogate'] = locs['mean_surrogate_loss']
+        
+        # Log Loss chi tiết theo task lên W&B nếu có
+        if isinstance(locs['mean_value_loss_dict'], dict):
+            for t_id, v_loss in locs['mean_value_loss_dict'].items():
+                if v_loss > 0: wandb_dict[f'Loss_Value/Task_{t_id}'] = v_loss
+            for t_id, s_loss in locs['mean_surrogate_loss_dict'].items():
+                if s_loss != 0: wandb_dict[f'Loss_Surrogate/Task_{t_id}'] = s_loss
+
         wandb_dict['Loss/entropy'] = entropy
         wandb_dict['Loss/learning_rate'] = self.alg.learning_rate
+        
+        # Lấy biến gumbel tau nếu có
+        current_tau = 0.0
+        if hasattr(self.alg.actor_critic, 'tau'):
+            current_tau = self.alg.actor_critic.tau
+            wandb_dict['Loss/gumbel_tau'] = current_tau
+            
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
         wandb_dict['Std/mean_std'] = mean_std
+        
         for i, std in enumerate(self.alg.actor_critic.std):
             wandb_dict[f'Std/std_dim_{i}'] = std
+            
         num_tasks = self.env.cfg.env.num_tasks
         task_log_string = ""
         
@@ -256,6 +260,7 @@ class OnPolicyRunner:
 
         wandb_dict['Train/dones'] = statistics.mean(locs['donebuffer']) if len(locs['donebuffer']) > 0 else 0.0
 
+        # Đẩy lên W&B
         if wandb.run is not None:
             wandb.log(wandb_dict, step=locs['it'])
         
@@ -264,9 +269,13 @@ class OnPolicyRunner:
         log_string = (f"""{'#' * width}\n"""
                       f"""{iter_str.center(width, ' ')}\n\n"""
                       f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs['collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
-                      f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
-                      f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                      f"""{'Mean action noise std:':>{pad}} {mean_std:.2f}\n""")
+                      f"""{'Value function loss (mean):':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                      f"""{'Surrogate loss (mean):':>{pad}} {locs['mean_surrogate_loss']:.4f}\n""")
+                      
+        if current_tau > 0:
+            log_string += f"""{'Gumbel Temperature (Tau):':>{pad}} {current_tau:.4f}\n"""
+            
+        log_string += f"""{'Mean action noise std:':>{pad}} {mean_std:.2f}\n"""
         
         if task_log_string:
             log_string += task_log_string
