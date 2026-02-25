@@ -52,8 +52,7 @@ class H1UnifiedTaskCfg(LeggedRobotCfg):
         torso_name = "torso"
         wrist_name = "wrist"
 
-        # terminate_after_contacts_on = ['pelvis', 'torso', 'shoulder', 'elbow', 'hip']
-        terminate_after_contacts_on = []
+        terminate_after_contacts_on = ['pelvis', 'torso', 'shoulder', 'elbow', 'hip']
         penalize_contacts_on = ["hip", 'knee', 'pelvis', 'torso', 'shoulder', 'elbow']
         self_collisions = 0  # 1 to disable, 0 to enable...bitwise filter
         flip_visual_attachments = False
