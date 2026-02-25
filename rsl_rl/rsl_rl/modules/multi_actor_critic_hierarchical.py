@@ -80,9 +80,9 @@ class MultiActorCriticHierarchical(nn.Module):
         self.num_groups = 3
         
         # Thiết lập thông số cho Temperature Annealing
-        self.tau_max = 5.0    # Nhiệt độ ban đầu (Khám phá mạnh)
+        self.tau_max = 1.0    # Nhiệt độ ban đầu (Khám phá mạnh)
         self.tau_min = 0.1    # Nhiệt độ cuối cùng (Gần với One-hot)
-        self.tau_decay = 0.99991 # Hệ số giảm sau mỗi lần gọi update
+        self.tau_decay = 0.99995 # Hệ số giảm sau mỗi lần gọi update
         self.tau = self.tau_max
 
     def update_tau(self):
